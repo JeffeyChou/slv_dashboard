@@ -5,3 +5,9 @@ requests
 beautifulsoup4
 lxml
 openpyxl
+xlrd
+requests-html
+pyppeteer
+PyPDF2
+pdfplumber
+tabula-py

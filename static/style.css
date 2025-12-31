@@ -103,6 +103,62 @@ h2 {
     width: 100%;
 }
 
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.metric-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    transition: background 0.2s;
+}
+
+.metric-box:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.metric-box .label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.metric-box .value {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.metric-box .value.highlight {
+    color: var(--accent-color);
+}
+
+.metric-box .sublabel {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    opacity: 0.7;
+}
+
+.card-wide {
+    grid-column: span 2;
+}
+
+@media (max-width: 768px) {
+    .card-wide {
+        grid-column: span 1;
+    }
+
+    .metric-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
 footer {
     text-align: center;
     margin-top: 4rem;

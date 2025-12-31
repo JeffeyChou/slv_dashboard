@@ -122,6 +122,51 @@
                 </div>
             </div>
 
+            <!-- P0 Indicators Card -->
+            <div class="card card-wide">
+                <h2>🎯 P0 Indicators (Squeeze Signals)</h2>
+                <div class="metric-grid">
+                    <div class="metric-box">
+                        <span class="label">Paper/Physical Ratio</span>
+                        <span class="value highlight" id="p0-paper-physical">Loading...</span>
+                        <span class="sublabel">COMEX OI / Registered</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="label">SLV Coverage</span>
+                        <span class="value" id="p0-slv-coverage">Loading...</span>
+                        <span class="sublabel">Registered / SLV oz</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="label">COMEX Dominance</span>
+                        <span class="value" id="p0-dominance">Loading...</span>
+                        <span class="sublabel">OI / SLV Ratio</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="label">Shanghai Premium</span>
+                        <span class="value highlight" id="p0-shanghai-prem">Loading...</span>
+                        <span class="sublabel">USD/oz vs COMEX</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="label">SHFE Turnover</span>
+                        <span class="value" id="p0-shfe-turnover">Loading...</span>
+                        <span class="sublabel">Vol / OI</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="label">SHFE Concentration</span>
+                        <span class="value" id="p0-shfe-conc">Loading...</span>
+                        <span class="sublabel">Main / Total OI</span>
+                    </div>
+                    <div class="metric-box">
+                        <span class="label">SHFE Curve Slope</span>
+                        <span class="value" id="p0-curve-slope">Loading...</span>
+                        <span class="sublabel">Far - Near (CNY)</span>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="p0Chart"></canvas>
+                </div>
+            </div>
+
             <!-- Shanghai Premium Card -->
             <div class="card">
                 <h2>Shanghai Premium (P0)</h2>
