@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Silver Market Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Silver Market Intelligence</h1>
+            <p class="subtitle">Real-time tracking of Futures, Inventory, Flows, and Macro Indicators</p>
+        </header>
+
+        <div class="grid">
+            <!-- Futures Card -->
+            <div class="card">
+                <h2>COMEX Futures (Mar '26)</h2>
+                <div class="metric-group">
+                    <div class="metric">
+                        <span class="label">Price</span>
+                        <span class="value" id="futures-price">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Volume</span>
+                        <span class="value" id="futures-volume">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Open Interest</span>
+                        <span class="value" id="futures-oi">Loading...</span>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="futuresChart"></canvas>
+                </div>
+            </div>
+
+            <!-- SLV Inventory Card -->
+            <div class="card">
+                <h2>iShares Silver Trust (SLV)</h2>
+                <div class="metric-group">
+                    <div class="metric">
+                        <span class="label">Inventory (Tonnes)</span>
+                        <span class="value" id="slv-tonnes">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Inventory (oz)</span>
+                        <span class="value" id="slv-ounces">Loading...</span>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="slvChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Exchange Stocks Card -->
+            <div class="card">
+                <h2>Exchange Inventories</h2>
+                <div class="metric-group">
+                    <div class="metric">
+                        <span class="label">CME Registered</span>
+                        <span class="value" id="cme-registered">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">CME Eligible</span>
+                        <span class="value" id="cme-eligible">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">LBMA Holdings</span>
+                        <span class="value" id="lbma-holdings">Loading...</span>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="inventoryChart"></canvas>
+                </div>
+            </div>
+
+            <!-- New Cards for v2 -->
+            
+            <!-- Macro Card -->
+            <div class="card">
+                <h2>Macro Indicators (P2)</h2>
+                <div class="metric-group">
+                    <div class="metric">
+                        <span class="label">USD Index (DXY)</span>
+                        <span class="value" id="macro-dxy">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">US 10Y Real Yield</span>
+                        <span class="value" id="macro-yield">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Gold/Silver Ratio</span>
+                        <span class="value" id="macro-gsr">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">USD/CNY</span>
+                        <span class="value" id="macro-cny">Loading...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sentiment Card -->
+            <div class="card">
+                <h2>Sentiment & Flows (P1)</h2>
+                <div class="metric-group">
+                    <div class="metric">
+                        <span class="label">SLV Put/Call Ratio</span>
+                        <span class="value" id="sent-pc-ratio">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Call Volume</span>
+                        <span class="value" id="sent-call-vol">Loading...</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">COT Status</span>
+                        <span class="value" id="sent-cot">Loading...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Shanghai Premium Card -->
+            <div class="card">
+                <h2>Shanghai Premium (P0)</h2>
+                <div class="metric-group">
+                    <div class="metric">
+                        <span class="label">SHFE Price (CNY)</span>
+                        <span class="value" id="shfe-price">N/A</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Premium (USD/oz)</span>
+                        <span class="value" id="shfe-premium">N/A</span>
+                    </div>
+                </div>
+                <p style="font-size: 0.8rem; color: var(--text-secondary);">* SHFE data access currently restricted</p>
+            </div>
+
+        </div>
+        
+        <footer>
+            <p>Data Sources: CME Group, iShares, LBMA, Yahoo Finance, FRED, CFTC. <br> Note: Some data may be delayed or estimated.</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
