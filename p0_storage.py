@@ -1,128 +1,180 @@
-import pandas as pd
+import sqlite3
 import os
-from datetime import datetime
-import json
+from datetime import datetime, timedelta
+import pandas as pd
 
 class P0TimeSeriesStorage:
     """
-    Time-series storage for P0 indicators using CSV with pandas.
-    Stores all data points with timestamps for 24-hour continuous charts.
+    Time-series storage for P0 indicators using SQLite.
+    Stores all data points with timestamps for historical analysis.
     """
-    def __init__(self, csv_file='p0_timeseries.csv'):
-        self.csv_file = csv_file
-        self.columns = [
-            'timestamp',
-            # SHFE Contract Metrics
-            'OI_ag2603', 'VOL_ag2603', 'Turnover_ag2603', 'ΔOI_ag2603',
-            'Front6_OI_sum_SHFE', 'OI_concentration_2603', 'Curve_slope_SHFE_3m6m',
-            # SHFE Inventory
-            'SHFE_Daily_Warrant_Ag', 'SHFE_Weekly_Inventory_Ag',
-            # COMEX Inventory
-            'COMEX_Silver_Registered', 'COMEX_Silver_Eligible', 
-            'ΔCOMEX_Registered', 'Registered_to_Total',
-            # COMEX Delivery
-            'COMEX_IssuesStops_Silver', 'COMEX_Deliveries_MTD',
-            # Basis & Premium
-            'Paper_to_Physical', 'Basis_USD_COMEX', 
-            'Shanghai_Premium_Implied', 'SGE_SHAG_vs_Overseas',
-            # LBMA
-            'LBMA_London_Vault_Silver',
-            # Additional context
-            'COMEX_Futures_Price', 'XAGUSD_Spot', 'SHFE_ag2603_Price'
-        ]
-        self._initialize_csv()
+    def __init__(self, db_file='p0_timeseries.db'):
+        self.db_file = db_file
+        self._initialize_db()
     
-    def _initialize_csv(self):
-        """Create CSV with headers if it doesn't exist"""
-        if not os.path.exists(self.csv_file):
-            df = pd.DataFrame(columns=self.columns)
-            df.to_csv(self.csv_file, index=False)
+    def _get_conn(self):
+        return sqlite3.connect(self.db_file)
+
+    def _initialize_db(self):
+        """Create table if it doesn't exist"""
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        
+        # Schema: timestamp, metric_name, value
+        # We store each metric as a separate row to be flexible
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS measurements (
+                timestamp TEXT,
+                metric_name TEXT,
+                value REAL,
+                PRIMARY KEY (timestamp, metric_name)
+            )
+        ''')
+        
+        # Index for fast time-range queries
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON measurements(timestamp)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_metric ON measurements(metric_name)')
+        
+        conn.commit()
+        conn.close()
     
     def append_data(self, data_dict):
         """
-        Append a new data point with current timestamp.
+        Append new data points.
         
         Args:
-            data_dict: Dictionary with P0 indicator values
+            data_dict: Dictionary with P0 indicator values. 
+                       Can be nested or flat. We only store numeric/string values.
         """
-        # Add timestamp
-        data_dict['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # Create DataFrame from single row
-        df_new = pd.DataFrame([data_dict])
+        conn = self._get_conn()
+        cursor = conn.cursor()
         
-        # Fill missing columns with None
-        for col in self.columns:
-            if col not in df_new.columns:
-                df_new[col] = None
-        
-        # Ensure column order
-        df_new = df_new[self.columns]
-        
-        # Append to CSV
-        df_new.to_csv(self.csv_file, mode='a', header=False, index=False)
-    
-    def get_recent_data(self, hours=24):
-        """
-        Get data from last N hours for charting.
-        
-        Args:
-            hours: Number of hours to retrieve (default 24)
-        
-        Returns:
-            pandas DataFrame with timestamp index
-        """
         try:
-            df = pd.read_csv(self.csv_file)
-            if df.empty:
-                return df
+            for key, value in data_dict.items():
+                if value is None or value == 'N/A':
+                    continue
+                
+                # If value is numeric, store it. If it's a string that looks like a number, convert it.
+                # We skip complex objects or non-numeric strings for the time series (unless we want to store them as text?)
+                # Requirement says "value" (implied numeric for charts).
+                
+                val_to_store = None
+                try:
+                    if isinstance(value, (int, float)):
+                        val_to_store = float(value)
+                    elif isinstance(value, str):
+                        # Try to clean string (remove commas)
+                        clean_val = value.replace(',', '')
+                        val_to_store = float(clean_val)
+                except:
+                    continue
+                
+                if val_to_store is not None:
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO measurements (timestamp, metric_name, value)
+                        VALUES (?, ?, ?)
+                    ''', (timestamp, key, val_to_store))
             
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            conn.commit()
             
-            # Filter for last N hours
-            cutoff = datetime.now() - pd.Timedelta(hours=hours)
-            df_recent = df[df['timestamp'] >= cutoff]
+            # Cleanup old data (Retention: 30 days)
+            self._cleanup_old_data(cursor)
+            conn.commit()
             
-            return df_recent.set_index('timestamp')
         except Exception as e:
-            print(f"Error reading time series: {e}")
-            return pd.DataFrame()
+            print(f"Error appending data: {e}")
+        finally:
+            conn.close()
     
-    def get_latest(self):
-        """Get the most recent data point"""
-        try:
-            df = pd.read_csv(self.csv_file)
-            if df.empty:
-                return {}
-            return df.iloc[-1].to_dict()
-        except:
-            return {}
-    
-    def get_delta(self, column, lag=1):
+    def append_data_with_timestamp(self, data_dict, timestamp):
         """
-        Calculate delta (change) for a specific column.
+        Append data with a specific timestamp (for backfilling).
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
         
-        Args:
-            column: Column name to calculate delta for
-            lag: Number of rows to look back (default 1 for previous point)
+        try:
+            for key, value in data_dict.items():
+                if value is None or value == 'N/A':
+                    continue
+                
+                val_to_store = None
+                try:
+                    if isinstance(value, (int, float)):
+                        val_to_store = float(value)
+                    elif isinstance(value, str):
+                        clean_val = value.replace(',', '')
+                        val_to_store = float(clean_val)
+                except:
+                    continue
+                
+                if val_to_store is not None:
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO measurements (timestamp, metric_name, value)
+                        VALUES (?, ?, ?)
+                    ''', (timestamp, key, val_to_store))
+            
+            conn.commit()
+        except Exception as e:
+            print(f"Error appending backfill data: {e}")
+        finally:
+            conn.close()
+
+    def _cleanup_old_data(self, cursor):
+        """Delete data older than 30 days"""
+        cutoff = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute('DELETE FROM measurements WHERE timestamp < ?', (cutoff,))
+        
+    def get_history(self, metric_name, days=30):
+        """
+        Get historical data for a specific metric.
         
         Returns:
-            Delta value or None
+            List of dicts: [{'timestamp': '...', 'value': 123.4}, ...]
         """
-        try:
-            df = pd.read_csv(self.csv_file)
-            if len(df) < lag + 1:
-                return None
-            
-            current = df[column].iloc[-1]
-            previous = df[column].iloc[-(lag+1)]
-            
-            if pd.isna(current) or pd.isna(previous):
-                return None
-            
-            return current - previous
-        except:
+        cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+        
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT timestamp, value FROM measurements
+            WHERE metric_name = ? AND timestamp >= ?
+            ORDER BY timestamp ASC
+        ''', (metric_name, cutoff))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [{'timestamp': r[0], 'value': r[1]} for r in rows]
+
+    def get_delta(self, metric_name, lag=1):
+        """
+        Calculate delta (change) for a specific metric.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        
+        # Get last 2 values
+        cursor.execute('''
+            SELECT value FROM measurements
+            WHERE metric_name = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        ''', (metric_name, lag + 1))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if len(rows) < lag + 1:
             return None
+        
+        current = rows[0][0]
+        previous = rows[lag][0]
+        
+        return current - previous
 
 if __name__ == "__main__":
     # Test the storage system
@@ -141,11 +193,12 @@ if __name__ == "__main__":
     storage.append_data(test_data)
     print("Data appended successfully")
     
-    # Get recent data
-    recent = storage.get_recent_data(hours=1)
-    print(f"\nRecent data ({len(recent)} points):")
-    print(recent.head())
+    # Get history
+    hist = storage.get_history('COMEX_Futures_Price')
+    print(f"\nHistory for COMEX_Futures_Price ({len(hist)} points):")
+    print(hist[:5])
     
-    # Test delta calculation
+    # Test delta
     delta = storage.get_delta('COMEX_Silver_Registered')
     print(f"\nΔRegistered: {delta}")
+

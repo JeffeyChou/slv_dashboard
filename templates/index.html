@@ -6,6 +6,7 @@
     <title>Silver Market Dashboard</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -34,7 +35,7 @@
                     </div>
                 </div>
                 <div class="chart-container">
-                    <canvas id="futuresChart"></canvas>
+                    <div id="futuresChart" style="width: 100%; height: 100%;"></div>
                 </div>
             </div>
 
@@ -74,7 +75,7 @@
                     </div>
                 </div>
                 <div class="chart-container">
-                    <canvas id="inventoryChart"></canvas>
+                    <div id="inventoryChart" style="width: 100%; height: 100%;"></div>
                 </div>
             </div>
 
@@ -164,6 +165,27 @@
                 </div>
                 <div class="chart-container">
                     <canvas id="p0Chart"></canvas>
+                </div>
+            </div>
+
+            <!-- P0 Trends Card -->
+            <div class="card card-wide">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h2 style="margin: 0;">📈 P0 Indicator Trends</h2>
+                    <select id="p0-metric-select" style="background: #1e293b; color: #e2e8f0; border: 1px solid #334155; padding: 0.5rem; border-radius: 0.25rem;">
+                        <option value="Paper_to_Physical">Paper/Physical Ratio</option>
+                        <option value="Shanghai_Premium_Implied">Shanghai Premium</option>
+                        <option value="SLV_Coverage">SLV Coverage</option>
+                        <option value="COMEX_Dominance">COMEX Dominance</option>
+                        <option value="Turnover_ag2603">SHFE Turnover</option>
+                        <option value="OI_concentration_2603">SHFE Concentration</option>
+                        <option value="Curve_slope_SHFE_3m6m">SHFE Curve Slope</option>
+                        <option value="COMEX_Silver_Registered">COMEX Registered</option>
+                        <option value="COMEX_IssuesStops_Silver">COMEX Issues/Stops</option>
+                    </select>
+                </div>
+                <div class="chart-container">
+                    <div id="p0HistoryChart" style="width: 100%; height: 100%;"></div>
                 </div>
             </div>
 

@@ -99,8 +99,19 @@ h2 {
 
 .chart-container {
     position: relative;
-    height: 200px;
+    height: 250px;
     width: 100%;
+    flex-grow: 1;
+    min-height: 200px;
+}
+
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
 }
 
 .metric-grid {
