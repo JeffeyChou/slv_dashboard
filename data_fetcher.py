@@ -8,6 +8,7 @@ import io
 import json
 import os
 from p0_storage import P0TimeSeriesStorage
+from cme_pdf_parser import CMEDeliveryParser
 
 class SilverDataFetcher:
     def __init__(self, cache_dir='./cache'):
@@ -16,10 +17,11 @@ class SilverDataFetcher:
         }
         self.cache_dir = cache_dir
         self.storage = P0TimeSeriesStorage()
+        self.pdf_parser = CMEDeliveryParser()
         os.makedirs(cache_dir, exist_ok=True)
-        # Metals-API key (free tier: 50 requests/month)
-        # User should set this as environment variable or in config
-        self.metals_api_key = os.getenv('METALS_API_KEY', '')
+        # metals.dev API key (100 calls/month = max 3 calls per day)
+        # User should set this as environment variable
+        self.metals_dev_key = os.getenv('METALS_DEV_KEY', '')
     
     def _get_cache_path(self, key):
         return os.path.join(self.cache_dir, f"{key}.json")
@@ -47,54 +49,103 @@ class SilverDataFetcher:
         except Exception as e:
             print(f"Warning: Could not write cache for {key}: {e}")
 
-    def get_spot_xagusd(self):
+    def get_metals_prices(self):
         """
-        Get XAGUSD spot price using Metals-API.
-        Free tier: 50 requests/month, update sparingly (5-min intervals OK)
-        """
-        cache_key = 'spot_xagusd'
+        Get precious metal prices from metals.dev API.
+        STRICT LIMIT: 100 calls/month = max 3 calls per 24 hours.
+        Cache TTL: 8 hours (3 calls per day = every 8 hours).
         
-        # Check cache (5 min TTL to preserve API quota)
+        Returns dict with silver, gold, lbma_silver, etc.
+        """
+        cache_key = 'metals_dev_prices'
+        
+        # Check cache with 8-hour TTL (480 minutes)
         cached = self._read_cache(cache_key)
-        if cached and self._is_cache_valid(self._get_cache_path(cache_key), ttl_minutes=5):
+        if cached and self._is_cache_valid(self._get_cache_path(cache_key), ttl_minutes=480):
             cached['source'] = 'Cache'
             return cached
         
-        if not self.metals_api_key:
+        if not self.metals_dev_key:
             # Fallback: use futures as proxy
             try:
                 si = yf.Ticker('SI=F')
-                price = si.info.get('regularMarketPrice')
+                gc = yf.Ticker('GC=F')
+                silver_price = si.info.get('regularMarketPrice')
+                gold_price = gc.info.get('regularMarketPrice')
+                
                 result = {
-                    'price': price,
+                    'silver': silver_price,
+                    'gold': gold_price,
+                    'lbma_silver': None,
+                    'gold_silver_ratio': round(gold_price / silver_price, 2) if silver_price else None,
                     'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                     'source': 'Futures Proxy (no API key)',
-                    'note': 'Set METALS_API_KEY env var for true spot'
+                    'note': 'Set METALS_DEV_KEY env var for metals.dev API'
                 }
                 self._write_cache(cache_key, result)
                 return result
             except:
                 return {'error': 'No API key and futures fetch failed'}
         
-        # Fetch from Metals-API
-        url = f"https://metals-api.com/api/latest?access_key={self.metals_api_key}&base=USD&symbols=XAG"
+        # Fetch from metals.dev (CAREFUL: limited calls!)
+        url = f"https://api.metals.dev/v1/latest?api_key={self.metals_dev_key}&currency=USD&unit=toz"
         try:
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 data = response.json()
-                if data.get('success'):
-                    # Metals-API returns 1 USD = X XAG, need to invert
-                    xag_per_usd = data['rates'].get('XAG')
-                    if xag_per_usd:
-                        usd_per_xag = 1 / xag_per_usd
-                        result = {
-                            'price': round(usd_per_xag, 2),
-                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'source': 'Metals-API'
-                        }
-                        self._write_cache(cache_key, result)
-                        return result
-            return {'error': f"Metals-API returned {response.status_code}"}
+                if data.get('status') == 'success':
+                    metals = data.get('metals', {})
+                    result = {
+                        'silver': metals.get('silver'),
+                        'gold': metals.get('gold'),
+                        'lbma_silver': metals.get('lbma_silver'),
+                        'lbma_gold_am': metals.get('lbma_gold_am'),
+                        'lbma_gold_pm': metals.get('lbma_gold_pm'),
+                        'gold_silver_ratio': round(metals.get('gold', 0) / metals.get('silver', 1), 2) if metals.get('silver') else None,
+                        'platinum': metals.get('platinum'),
+                        'palladium': metals.get('palladium'),
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'api_timestamp': data.get('timestamps', {}).get('metal'),
+                        'source': 'metals.dev API'
+                    }
+                    self._write_cache(cache_key, result)
+                    print(f"[metals.dev] API call successful - cached for 8 hours")
+                    return result
+            return {'error': f"metals.dev returned {response.status_code}"}
+        except Exception as e:
+            return {'error': str(e)}
+    
+    def get_realtime_spot(self):
+        """
+        Get real-time spot prices using yfinance futures as proxy.
+        This is called every 5 minutes for dashboard updates.
+        
+        Periodically (every 8 hours), metals.dev API is called to calibrate.
+        This approach keeps data fresh while respecting API limits.
+        """
+        try:
+            si = yf.Ticker('SI=F')
+            gc = yf.Ticker('GC=F')
+            
+            silver_price = si.info.get('regularMarketPrice')
+            gold_price = gc.info.get('regularMarketPrice')
+            
+            # Get metals.dev baseline (cached 8 hours)
+            metals_baseline = self.get_metals_prices()
+            
+            result = {
+                'silver': silver_price,
+                'gold': gold_price,
+                'gold_silver_ratio': round(gold_price / silver_price, 2) if silver_price else None,
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'source': 'Real-time (yfinance futures)',
+                # Include metals.dev cached values for reference
+                'metals_dev_silver': metals_baseline.get('silver'),
+                'metals_dev_lbma': metals_baseline.get('lbma_silver'),
+                'metals_dev_timestamp': metals_baseline.get('timestamp'),
+                'metals_dev_source': metals_baseline.get('source')
+            }
+            return result
         except Exception as e:
             return {'error': str(e)}
 
@@ -234,12 +285,25 @@ class SilverDataFetcher:
         return result
 
     def get_macro_data(self):
+        """Get macro indicators - USD Index from yfinance, others from FRED"""
         series_map = {
-            'usd_index': 'DTWEXBGS',
             'real_yield': 'DFII10',
             'usd_cny': 'DEXCHUS'
         }
         data = {}
+        
+        # Get USD Index from yfinance (DX-Y.NYB) - more accurate than FRED
+        try:
+            dxy = yf.Ticker('DX-Y.NYB')
+            dxy_price = dxy.info.get('regularMarketPrice')
+            if dxy_price:
+                data['usd_index'] = round(dxy_price, 4)
+            else:
+                data['usd_index'] = None
+        except:
+            data['usd_index'] = None
+        
+        # Get other series from FRED
         for key, series_id in series_map.items():
             url = f"https://fred.stlouisfed.org/series/{series_id}"
             try:
@@ -255,13 +319,18 @@ class SilverDataFetcher:
             except:
                 data[key] = None
         
+        # Gold/Silver ratio from real-time or metals.dev
         try:
-            gold = yf.Ticker("GC=F").info.get('regularMarketPrice')
-            silver = yf.Ticker("SI=F").info.get('regularMarketPrice')
-            if gold and silver:
-                data['gold_silver_ratio'] = round(gold / silver, 2)
+            realtime = self.get_realtime_spot()
+            if realtime.get('gold_silver_ratio'):
+                data['gold_silver_ratio'] = realtime['gold_silver_ratio']
             else:
-                data['gold_silver_ratio'] = None
+                gold = yf.Ticker("GC=F").info.get('regularMarketPrice')
+                silver = yf.Ticker("SI=F").info.get('regularMarketPrice')
+                if gold and silver:
+                    data['gold_silver_ratio'] = round(gold / silver, 2)
+                else:
+                    data['gold_silver_ratio'] = None
         except:
             data['gold_silver_ratio'] = None
 
@@ -412,7 +481,12 @@ class SilverDataFetcher:
         cme = self.get_cme_data()
         futures = self.get_futures_data()
         slv = self.get_slv_data()
-        spot = self.get_spot_xagusd()
+        
+        # Get metals prices - hybrid approach:
+        # 1. metals.dev baseline (8hr cache) for accuracy
+        # 2. Real-time futures overlay for 5-min updates
+        metals_baseline = self.get_metals_prices()  # 8-hour cached
+        realtime_spot = self.get_realtime_spot()  # Real-time futures proxy
         
         # Calculate P0 indicators
         p0_data = {}
@@ -435,38 +509,78 @@ class SilverDataFetcher:
             p0_data['ΔCOMEX_Registered'] = cme.get('delta_registered')
             p0_data['Registered_to_Total'] = cme.get('registered_to_total_ratio')
         
-        # Basis & Premium
+        # Basis & Premium (use real-time spot)
         if futures.get('price') and not futures.get('error'):
             p0_data['COMEX_Futures_Price'] = futures.get('price')
             
-            if spot.get('price') and not spot.get('error'):
-                p0_data['XAGUSD_Spot'] = spot.get('price')
-                p0_data['Basis_USD_COMEX'] = round(futures['price'] - spot['price'], 2)
+            if realtime_spot.get('silver') and not realtime_spot.get('error'):
+                p0_data['XAGUSD_Spot'] = realtime_spot.get('silver')
+                p0_data['Basis_USD_COMEX'] = round(futures['price'] - realtime_spot['silver'], 2)
         
         # Paper to Physical
         if futures.get('open_interest') and cme.get('registered'):
             oi_oz = futures['open_interest'] * 5000
             p0_data['Paper_to_Physical'] = round(oi_oz / cme['registered'], 2)
         
-        # Shanghai Premium
-        if shfe.get('price') and macro.get('usd_cny') and spot.get('price'):
+        # SLV Coverage (CME Registered / SLV Ounces)
+        if cme.get('registered') and slv.get('inventory_ounces'):
+            slv_oz = slv['inventory_ounces']
+            if isinstance(slv_oz, (int, float)):
+                p0_data['SLV_Coverage'] = round(cme['registered'] / slv_oz, 4)
+        
+        # COMEX Dominance (COMEX OI in oz / SLV Ounces)
+        if futures.get('open_interest') and slv.get('inventory_ounces'):
+            slv_oz = slv['inventory_ounces']
+            if isinstance(slv_oz, (int, float)):
+                oi_oz = futures['open_interest'] * 5000
+                p0_data['COMEX_Dominance'] = round(oi_oz / slv_oz, 2)
+        
+        # Shanghai Premium (use real-time spot)
+        if shfe.get('price') and macro.get('usd_cny') and realtime_spot.get('silver'):
             shfe_price_cny_kg = shfe['price']
             shfe_usd_oz = (shfe_price_cny_kg / 1000 / 31.1035) / macro['usd_cny']
-            p0_data['Shanghai_Premium_Implied'] = round(shfe_usd_oz - spot['price'], 2)
+            p0_data['Shanghai_Premium_Implied'] = round(shfe_usd_oz - realtime_spot['silver'], 2)
         
-        # LBMA
-        lbma = self.get_lbma_data()
-        if lbma.get('holdings_tonnes'):
-            try:
-                tonnes = float(lbma['holdings_tonnes'].replace(',', ''))
-                p0_data['LBMA_London_Vault_Silver'] = tonnes
-            except:
-                pass
+        # LBMA (use metals.dev baseline for LBMA silver price)
+        if metals_baseline.get('lbma_silver'):
+            p0_data['LBMA_London_Vault_Silver'] = metals_baseline.get('lbma_silver')
+        
+        # COMEX Delivery (PDF parsing - daily cache)
+        cache_key_delivery = 'cme_delivery_daily'
+        cached_delivery = self._read_cache(cache_key_delivery)
+        
+        if cached_delivery and self._is_cache_valid(self._get_cache_path(cache_key_delivery), ttl_minutes=1440):
+            # Use cached (24hr TTL)
+            delivery_daily = cached_delivery
+        else:
+            # Fetch fresh
+            delivery_daily = self.pdf_parser.parse_daily_issues_stops()
+            if not delivery_daily.get('error'):
+                self._write_cache(cache_key_delivery, delivery_daily)
+        
+        if delivery_daily.get('found'):
+            p0_data['COMEX_IssuesStops_Silver'] = delivery_daily.get('issued', 0) + delivery_daily.get('stopped', 0)
+        
+        # MTD Delivery
+        cache_key_mtd = 'cme_delivery_mtd'
+        cached_mtd = self._read_cache(cache_key_mtd)
+        
+        if cached_mtd and self._is_cache_valid(self._get_cache_path(cache_key_mtd), ttl_minutes=1440):
+            delivery_mtd = cached_mtd
+        else:
+            delivery_mtd = self.pdf_parser.parse_mtd_deliveries()
+            if not delivery_mtd.get('error'):
+                self._write_cache(cache_key_mtd, delivery_mtd)
+        
+        if delivery_mtd.get('found'):
+            p0_data['COMEX_Deliveries_MTD'] = delivery_mtd.get('mtd_issued', 0)
         
         # Store to time series
         self.storage.append_data(p0_data)
         
         # Return full dataset
+        lbma = self.get_lbma_data()  # Still need estimate for vault tonnes
+        
         return {
             'futures': futures,
             'slv': slv,
@@ -476,7 +590,8 @@ class SilverDataFetcher:
             'options': self.get_options_data(),
             'cot': self.get_cot_data(),
             'shfe': shfe,
-            'spot': spot,
+            'metals_baseline': metals_baseline,  # 8-hour metals.dev cache
+            'realtime_spot': realtime_spot,  # Real-time futures proxy
             'p0_indicators': p0_data,
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }

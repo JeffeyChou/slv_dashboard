@@ -1,0 +1,13 @@
+{
+  "silver": 71.367,
+  "gold": 4317.42,
+  "lbma_silver": 74.83,
+  "lbma_gold_am": 4389.45,
+  "lbma_gold_pm": 4367.8,
+  "gold_silver_ratio": 60.5,
+  "platinum": 2034.912,
+  "palladium": 1609.149,
+  "timestamp": "2025-12-31 14:30:09",
+  "api_timestamp": "2025-12-31T19:29:03.854Z",
+  "source": "metals.dev API"
+}

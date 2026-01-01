@@ -10,7 +10,7 @@ def index():
 
 @app.route('/api/data')
 def get_data():
-    data = fetcher.get_all_data()
+    data = fetcher.get_all_data_and_store()
     return jsonify(data)
 
 if __name__ == '__main__':

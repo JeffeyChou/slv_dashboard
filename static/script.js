@@ -43,8 +43,9 @@ function updateDashboard(data) {
         renderInventoryChart(data.cme, data.lbma);
     }
 
-    // Macro (P2)
+    // Macro (P2) - Use metals.dev or realtime_spot for DXY alternative
     if (data.macro) {
+        // USD Index from yfinance DX-Y.NYB instead of FRED
         document.getElementById('macro-dxy').textContent = data.macro.usd_index || 'N/A';
         document.getElementById('macro-yield').textContent = data.macro.real_yield ? data.macro.real_yield + '%' : 'N/A';
         document.getElementById('macro-gsr').textContent = data.macro.gold_silver_ratio || 'N/A';
@@ -66,16 +67,16 @@ function updateDashboard(data) {
         document.getElementById('shfe-premium').textContent = data.shfe.premium_usd || 'N/A';
     }
 
-    // P0 Indicators
+    // P0 Indicators - FIXED FIELD NAMES
     if (data.p0_indicators) {
         const p0 = data.p0_indicators;
-        document.getElementById('p0-paper-physical').textContent = formatValue(p0.paper_to_physical);
-        document.getElementById('p0-slv-coverage').textContent = formatValue(p0.slv_coverage);
-        document.getElementById('p0-dominance').textContent = formatValue(p0.comex_dominance);
-        document.getElementById('p0-shanghai-prem').textContent = formatValue(p0.shanghai_premium, '$');
-        document.getElementById('p0-shfe-turnover').textContent = formatValue(p0.shfe_turnover);
-        document.getElementById('p0-shfe-conc').textContent = formatValue(p0.shfe_concentration);
-        document.getElementById('p0-curve-slope').textContent = formatValue(p0.shfe_curve_slope);
+        document.getElementById('p0-paper-physical').textContent = formatValue(p0.Paper_to_Physical);
+        document.getElementById('p0-slv-coverage').textContent = formatValue(p0.SLV_Coverage);
+        document.getElementById('p0-dominance').textContent = formatValue(p0.COMEX_Dominance);
+        document.getElementById('p0-shanghai-prem').textContent = formatValue(p0.Shanghai_Premium_Implied, '$');
+        document.getElementById('p0-shfe-turnover').textContent = formatValue(p0.Turnover_ag2603);
+        document.getElementById('p0-shfe-conc').textContent = formatValue(p0.OI_concentration_2603);
+        document.getElementById('p0-curve-slope').textContent = formatValue(p0.Curve_slope_SHFE_3m6m);
 
         renderP0Chart(p0);
     }
@@ -204,12 +205,12 @@ function renderP0Chart(p0) {
     const colors = [];
 
     const metrics = [
-        { label: 'Paper/Phys', value: p0.paper_to_physical, color: 'rgba(248, 113, 113, 0.7)' },
-        { label: 'SLV Cov', value: p0.slv_coverage, color: 'rgba(251, 191, 36, 0.7)' },
-        { label: 'Dominance', value: p0.comex_dominance, color: 'rgba(56, 189, 248, 0.7)' },
-        { label: 'Premium', value: p0.shanghai_premium, color: 'rgba(52, 211, 153, 0.7)' },
-        { label: 'Turnover', value: p0.shfe_turnover, color: 'rgba(167, 139, 250, 0.7)' },
-        { label: 'Concentration', value: p0.shfe_concentration, color: 'rgba(236, 72, 153, 0.7)' }
+        { label: 'Paper/Phys', value: p0.Paper_to_Physical, color: 'rgba(248, 113, 113, 0.7)' },
+        { label: 'SLV Cov', value: p0.SLV_Coverage, color: 'rgba(251, 191, 36, 0.7)' },
+        { label: 'Dominance', value: p0.COMEX_Dominance, color: 'rgba(56, 189, 248, 0.7)' },
+        { label: 'Shanghai', value: p0.Shanghai_Premium_Implied, color: 'rgba(52, 211, 153, 0.7)' },
+        { label: 'Turnover', value: p0.Turnover_ag2603, color: 'rgba(167, 139, 250, 0.7)' },
+        { label: 'Concen', value: p0.OI_concentration_2603, color: 'rgba(236, 72, 153, 0.7)' }
     ];
 
     metrics.forEach(m => {

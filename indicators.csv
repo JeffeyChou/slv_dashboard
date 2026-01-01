@@ -1,0 +1,22 @@
+﻿优先级,指标（ID）,定义 / 计算（含频率）,One-line reason,数据源 / API（含备注）
+P0,ΔOI_ag2603,SHFE ag2603 日持仓量变化（OI_t - OI_{t-1}）,最直接的“压力源”：近端加仓/减仓速度决定潜在交割挤兑强度。,SHFE Delayed Quotes（延时行情，ag_f）：https://www.shfe.com.cn/eng/reports/delayedMarketData/DelayedQuotes/ ；示例含 query_params=delaymarket_f&query_product_code=ag_f。
+P0,OI_ag2603,SHFE ag2603 日持仓量（Open Interest）,绝对 OI 决定潜在交割需求规模；与仓单/库存做覆盖率最关键。,"同上（SHFE Delayed Quotes, ag_f）。"
+P0,VOL_ag2603,SHFE ag2603 日成交量（Volume）,量能扩张 + OI 扩张通常比单看价格更能确认逼空/趋势阶段。,"同上（SHFE Delayed Quotes, ag_f）。"
+P0,Turnover_ag2603,VOL/OI（换手强度）,区分“真加仓压力”（OI 上行）vs “高换手对倒”（量大但 OI 不涨）。,由 VOL 与 OI 计算（源同上）。
+P0,Front6_OI_sum_SHFE,SHFE 白银近 6 个月合约 OI 之和（按到期月聚合）,逼空风险集中在近端曲线，近端总杠杆比单合约更稳健。,"同上（SHFE Delayed Quotes, ag_f）。"
+P0,OI_concentration_2603,OI_ag2603 / Front6_OI_sum_SHFE,集中度上升意味着压力更聚焦，更易触发单点逼仓/挤兑。,计算项（源同上）。
+P0,Curve_slope_SHFE_3m6m,例如 Px_ag2606 - Px_ag2603（日度 calendar spread）,实物紧缺/逼空会压平 carry、推升近端（倒挂或 carry 收敛）。,"同上（SHFE Delayed Quotes, ag_f）。"
+P0,SHFE_Daily_Warrant_Ag,SHFE 白银日仓单/标准仓单量（可交割供给 proxy）,交割体系内“可用于交割”的最核心供给观测量。,SHFE Daily Warrant：https://www.shfe.com.cn/eng/reports/StatisticalData/DailyData/?query_params=dailystock
+P0,SHFE_Weekly_Inventory_Ag,SHFE 白银周库存（仓库库存周报）,周频库存更贴近真实库存趋势，可过滤日仓单噪音。,SHFE Weekly Inventory：https://www.shfe.com.cn/eng/reports/StatisticalData/WeeklyData/?query_params=weeklystock
+P0,COMEX_Silver_Registered,COMEX 白银 Registered 库存（盎司，日频）,逼空的硬约束：Registered 越低，“即时可交割弹药”越少。,CME Silver Stocks（XLS）：https://www.cmegroup.com/delivery_reports/Silver_stocks.xls
+P0,COMEX_Silver_Eligible,COMEX 白银 Eligible 库存（盎司，日频）,潜在缓冲：极端压力下 Eligible→Registered 转换的空间与节奏。,同上（Silver_stocks.xls）。
+P0,ΔCOMEX_Registered,Registered 日变化（差分）,连续下滑/异常波动往往领先于逼空推进与提货节奏变化。,由 Silver_stocks.xls 的 time series 计算。
+P0,Registered_to_Total,Registered / (Registered + Eligible),同样总库存下，Registered 占比越低，交割紧张度越高。,由 Silver_stocks.xls 计算。
+P0,COMEX_IssuesStops_Silver,COMEX 白银交割日报：issued/stopped 合约数（日频）,逼空“攻击”最终落在交割流上；issue/stop 异常跳变是高信号。,CME Metals Issues and Stops Report（PDF）：https://www.cmegroup.com/delivery_reports/MetalsIssuesAndStopsReport.pdf （另有 MTD/YTD 报告）。
+P0,COMEX_Deliveries_MTD,当月累计交割量（由日 issue/stop 累加）,衡量“本交割月有多大比例选择实物交割”，逼空月通常显著抬升。,CME MTD Report（PDF）：https://www.cmegroup.com/delivery_reports/MetalsIssuesAndStopsMTDReport.pdf
+P0,Paper_to_Physical,OI / Registered（或 Registered / OI）；需统一合约乘数,把“纸面需求”与“可交割供给”放同一尺度，逼空杠杆长度一目了然。,Registered：Silver_stocks.xls；OI：期货数据源（例如 Barchart OnDemand getQuote/getHistory 或 CME 数据）。
+P0,Basis_USD_COMEX,COMEX 近月期货（USD）- 现货 XAGUSD（USD/oz）,基差与其动量是现货紧张/逼空强弱的直接价格映射。,期货（跨市场）：Barchart OnDemand getQuote/getHistory：https://www.barchart.com/ondemand/api/getQuote；现货：Metals-API / GoldAPI 等。
+P0,Shanghai_Premium_Implied,SHFE 价格折算 USD/oz 后 - 海外现货 XAGUSD,跨市场溢价常反映区域性实物流向与摩擦；是重要 alpha 来源。,SHFE ag_f（Delayed Quotes）；FX：FRED DEXCHUS；现货：Metals-API/GoldAPI。
+P0,SGE_SHAG_vs_Overseas,SGE SHAG（RMB）折算 USD/oz - 海外现货 XAGUSD,SGE 基准价更贴近中国实物端；与海外价差可视作“区域现货紧张度”。,SGE Shanghai Silver Benchmark Price（SHAG）：https://en.sge.com.cn/data_SilverBenchmarkPrice；FX：FRED；现货：Metals-API/GoldAPI。
+P0,LBMA_London_Vault_Silver,LBMA 伦敦银库总量（吨/盎司，月频，1 个月滞后）,验证是否是“全球实物紧缺”而非单一市场纸面：伦敦库存趋势是关键维度。,LBMA London Vault Data：https://www.lbma.org.uk/prices-and-data/london-vault-data（官方月度 xlsx 下载）。
+P0,Contract_Spec_SHFE_Ag,合约单位：15 kg/手；交割单位：30 kg（用于单位换算与覆盖率）,覆盖率/基差/跨市场折算必须统一单位，否则信号失真。,SHFE Silver Futures Contract 说明：https://www.shfe.com.cn/eng/Market/Futures/Metal/ag_f/
