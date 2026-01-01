@@ -315,6 +315,53 @@ python p0_storage.py
 - **v1.0** - Initial dashboard with basic futures/inventory
 - **v2.0** - Added P0 indicators, SHFE integration, PDF parsing, hybrid data strategy
 
+## P1 Indicators (Sentiment & Flows) - Implementation Plan
+
+### Goal
+Track sentiment and positioning in the ETF and Options market.
+
+### Indicators
+1. **SLV_Ounces_in_Trust**: Daily ETF holdings (Source: iShares website).
+2. **SLV_Options_CallPut_OI**: Put/Call Ratio (Source: Tradier/Yahoo Finance).
+3. **COT_Commercial_Net**: CFTC Commercial Positioning (Source: CFTC/Quandl).
+4. **COT_ManagedMoney_Net**: Speculative Positioning (Source: CFTC/Quandl).
+
+### Strategy
+- **SLV Holdings**: Scrape iShares product page or use direct CSV download.
+- **Options**: Use `yfinance` (`yf.Ticker('SLV').option_chain`) to aggregate OI for near-term expiries.
+- **COT**: Fetch weekly from CFTC government site or use `quandl` library (requires API key) or `cot_reports` library.
+
+## P2 Indicators (Macro) - Implementation Plan
+
+### Goal
+Monitor macroeconomic tailwinds/headwinds for precious metals.
+
+### Indicators
+1. **USD_Broad_Index**: DXY or Broad Dollar (Source: FRED/Yahoo).
+2. **US_Real_Yield**: 10Y TIPS Yield (Source: FRED).
+3. **Gold_Silver_Ratio**: XAU/XAG (Source: yfinance/metals.dev).
+4. **USDCNY**: Exchange rate for SHFE arb (Source: FRED/Yahoo).
+
+### Strategy
+- **FRED Integration**: Use `fredapi` or direct HTTP calls to St. Louis Fed API.
+- **Correlation**: Calculate rolling correlation between Silver and Real Yields/DXY.
+
+## Current Progress (v3.0)
+
+### ✅ Completed Features
+- **Time-Series System**: Replaced CSV with SQLite (`p0_timeseries.db`) for robust historical data storage.
+- **Historical Backfill**: Automatically fetches last 30 days of daily close prices to populate charts on startup.
+- **SHFE Integration**: Fixed data parsing and relaxed file age checks to ensure Chinese market data is visible.
+- **Advanced Visualization**:
+  - **Intraday Chart**: ECharts dual-axis (Price vs OI).
+  - **Inventory Chart**: ECharts 30-day trend for SLV and COMEX.
+  - **P0 Trends**: Dynamic chart to view history of any P0 indicator (e.g., Shanghai Premium, Paper/Physical).
+- **Responsive Design**: Dashboard adapts to different screen sizes.
+
+### 🚧 In Progress
+- **P1 Implementation**: Setting up options chain data fetching.
+- **P2 Implementation**: Integrating FRED API.
+
 ## License
 
 Internal use only
