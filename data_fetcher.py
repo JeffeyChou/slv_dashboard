@@ -208,48 +208,23 @@ class SilverDataFetcher:
             if response.status_code == 200:
                 df = pd.read_excel(io.BytesIO(response.content), engine='xlrd')
                 
-                header_row_idx = None
+                total_registered = None
+                total_eligible = None
+                
+                # Find TOTAL REGISTERED and TOTAL ELIGIBLE rows
                 for i, row in df.iterrows():
-                    row_str = " ".join([str(x) for x in row.values])
-                    if "TOTAL TODAY" in row_str and "DEPOSITORY" in row_str:
-                        header_row_idx = i
-                        break
+                    label = str(row.iloc[0]).strip()
+                    if label == "TOTAL REGISTERED":
+                        total_registered = float(row.iloc[7])
+                    elif label == "TOTAL ELIGIBLE":
+                        total_eligible = float(row.iloc[7])
                 
-                if header_row_idx is None:
-                    return {'error': "Could not find header row"}
-                
-                headers = df.iloc[header_row_idx]
-                col_total = None
-                for idx, val in enumerate(headers):
-                    if str(val).strip() == "TOTAL TODAY":
-                        col_total = idx
-                        break
-                
-                if col_total is None:
-                    col_total = 7
-
-                total_registered = 0
-                total_eligible = 0
-                
-                for i in range(header_row_idx + 1, len(df)):
-                    row = df.iloc[i]
-                    category = str(row.iloc[0]).strip()
-                    val = row.iloc[col_total]
-                    
-                    try:
-                        val_float = float(val)
-                    except:
-                        continue
-                        
-                    if category == "Registered":
-                        total_registered += val_float
-                    elif category == "Eligible":
-                        total_eligible += val_float
+                if total_registered is None or total_eligible is None:
+                    return {'error': "Could not find TOTAL REGISTERED/ELIGIBLE rows"}
 
                 total = total_registered + total_eligible
                 reg_to_total = (total_registered / total) if total > 0 else 0
                 
-                # Calculate delta from previous
                 delta_registered = self.storage.get_delta('COMEX_Silver_Registered')
                 
                 result = {

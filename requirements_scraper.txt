@@ -1,0 +1,7 @@
+yfinance
+matplotlib
+pandas
+requests
+python-dotenv
+openpyxl
+pytz
