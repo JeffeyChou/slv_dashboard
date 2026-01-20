@@ -153,28 +153,34 @@ class P0TimeSeriesStorage:
     def get_delta(self, metric_name, lag=1):
         """
         Calculate delta (change) for a specific metric.
+        Compare current value with the most recent DIFFERENT value.
         """
         conn = self._get_conn()
         cursor = conn.cursor()
         
-        # Get last 2 values
+        # Get all values ordered by timestamp DESC
         cursor.execute('''
             SELECT value FROM measurements
             WHERE metric_name = ?
             ORDER BY timestamp DESC
-            LIMIT ?
-        ''', (metric_name, lag + 1))
+        ''', (metric_name,))
         
         rows = cursor.fetchall()
         conn.close()
         
-        if len(rows) < lag + 1:
+        if len(rows) < 2:
             return None
         
         current = rows[0][0]
-        previous = rows[lag][0]
         
-        return current - previous
+        # Find the most recent value that's different from current
+        for i in range(1, len(rows)):
+            previous = rows[i][0]
+            if previous != current:
+                return current - previous
+        
+        # All values are the same
+        return 0.0
 
 if __name__ == "__main__":
     # Test the storage system

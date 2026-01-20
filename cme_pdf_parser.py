@@ -164,61 +164,33 @@ class CMEDeliveryParser:
                 for page in pdf.pages:
                     full_text += page.extract_text() + "\n"
                 
-                # Find COMEX 5000 SILVER FUTURES section - look for the section and the data after it
-                silver_start = full_text.find('COMEX 5000 SILVER FUTURES')
-                if silver_start == -1:
-                    return {'error': 'COMEX 5000 SILVER FUTURES section not found'}
+                # Find the COMEX 5000 SILVER FUTURES section (not MICRO)
+                start = full_text.find('CONTRACT: JANUARY 2026 COMEX 5000 SILVER FUTURES')
+                if start == -1:
+                    return {'error': 'COMEX 5000 SILVER FUTURES contract not found'}
                 
-                # Get text starting from silver section
-                silver_text = full_text[silver_start:]
+                # Find the end of this section (before MICRO SILVER or next contract)
+                end_markers = ['CONTRACT: JANUARY 2026 MICRO SILVER FUTURES', 'EXCHANGE: COMEX']
+                end = len(full_text)
+                for marker in end_markers:
+                    marker_pos = full_text.find(marker, start + 100)  # Skip the current contract line
+                    if marker_pos != -1:
+                        end = min(end, marker_pos)
                 
-                # Find the next contract section to limit our search
-                next_contract = re.search(r'CONTRACT:\s+\w+\s+\d{4}', silver_text[100:])  # Skip the current contract line
-                if next_contract:
-                    silver_text = silver_text[:100 + next_contract.start()]
+                silver_section = full_text[start:end]
                 
-                print(f"Silver section text (limited):\n{silver_text[:800]}")
-                
-                # Look for date patterns in the silver section
-                # Try multiple date patterns
-                date_patterns = [
-                    r'(\d{1,2}/\d{1,2}/\d{4})\s+([0-9,]+)\s+([0-9,]+)',  # MM/DD/YYYY DAILY CUMULATIVE
-                    r'(\d{1,2}/\d{1,2})\s+([0-9,]+)\s+([0-9,]+)',        # MM/DD DAILY CUMULATIVE
-                ]
-                
-                matches = []
-                for pattern in date_patterns:
-                    matches = re.findall(pattern, silver_text)
-                    if matches:
-                        print(f"Found matches with pattern: {pattern}")
-                        print(f"Matches: {matches}")
-                        break
+                # Extract date patterns: MM/DD/YYYY DAILY CUMULATIVE
+                matches = re.findall(r'(\d{1,2}/\d{1,2}/\d{4})\s+([0-9,]+)\s+([0-9,]+)', silver_section)
                 
                 if not matches:
-                    # Check if there's simply no delivery data (empty section)
-                    if 'INTENT DATE' in silver_text and 'DAILY' in silver_text and 'CUMULATIVE' in silver_text:
-                        # Section exists but no data - this is normal for months with no deliveries
-                        return {
-                            'data': [],
-                            'found': True,
-                            'source': 'CME MTD PDF - No Deliveries This Month',
-                            'note': 'No silver deliveries recorded for current month'
-                        }
-                    else:
-                        return {'error': 'No daily data found in silver section', 'debug_section': silver_text[:500]}
+                    return {'error': 'No delivery data found in COMEX 5000 SILVER FUTURES section'}
                 
-                # Process matches and get last 3 entries
+                # Get last 3 entries
                 last_3_days = []
                 for match in matches[-3:]:
                     intent_date = match[0]
                     daily_total = int(match[1].replace(',', ''))
                     cumulative = int(match[2].replace(',', ''))
-                    
-                    # Add current year if not present
-                    if '/' in intent_date and len(intent_date.split('/')) == 2:
-                        from datetime import datetime
-                        current_year = datetime.now().year
-                        intent_date = f"{intent_date}/{current_year}"
                     
                     last_3_days.append({
                         'intent_date': intent_date,
@@ -229,7 +201,7 @@ class CMEDeliveryParser:
                 return {
                     'data': last_3_days,
                     'found': True,
-                    'source': 'CME MTD PDF - Last 3 Days'
+                    'source': 'CME MTD PDF - COMEX 5000 SILVER FUTURES'
                 }
                 
         except Exception as e:

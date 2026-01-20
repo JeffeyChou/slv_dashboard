@@ -381,71 +381,52 @@ class SilverDataFetcher:
             return {'error': str(e)}
 
     def get_shfe_data(self):
-        """Load SHFE + calculate all derived metrics"""
-        json_file = 'shfe_market_data.json'
-        
-        if os.path.exists(json_file):
-            # Relaxed age check: 24 hours instead of 30 mins
-            file_age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(json_file))
-            if file_age.total_seconds() < 86400: 
-                try:
-                    with open(json_file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    
-                    if not data:
-                        return {'status': 'No Data'}
-                    
-                    # Find main contract (highest OI)
-                    main_contract = max(data, key=lambda x: int(str(x.get('持仓量', '0')).replace(',', '') or '0'))
-                    
-                    oi = int(str(main_contract.get('持仓量', '0')).replace(',', '') or '0')
-                    vol = int(str(main_contract.get('成交量', '0')).replace(',', '') or '0')
-                    
-                    # Front 6 months sum
-                    sorted_contracts = sorted(data, key=lambda x: x.get('合约名称', ''))[:6]
-                    front6_oi = sum([int(str(x.get('持仓量', '0')).replace(',', '') or '0') for x in sorted_contracts])
-                    
-                    # Concentration
-                    concentration = round(oi / front6_oi, 4) if front6_oi > 0 else 0
-                    
-                    # Turn over
-                    turnover = round(vol / oi, 4) if oi > 0 else 0
-                    
-                    # Curve slope (3m vs 6m) - ag2603 vs ag2606
-                    price_2603 = None
-                    price_2606 = None
-                    for contract in data:
-                        name = contract.get('合约名称', '')
-                        if name == 'ag2603':
-                            price_2603 = float(str(contract.get('最新价', '0')).replace(',', '') or '0')
-                        elif name == 'ag2606':
-                            price_2606 = float(str(contract.get('最新价', '0')).replace(',', '') or '0')
-                    
-                    curve_slope = None
-                    if price_2603 and price_2606:
-                        curve_slope = round(price_2606 - price_2603, 2)
-                    
-                    # Delta OI from previous stored value
-                    delta_oi = self.storage.get_delta('OI_ag2603')
-                    
-                    return {
-                        'contract': main_contract.get('合约名称'),
-                        'price': float(str(main_contract.get('最新价', '0')).replace(',', '') or '0'),
-                        'oi': oi,
-                        'volume': vol,
-                        'turnover_ratio': turnover,
-                        'front6_oi_sum': front6_oi,
-                        'oi_concentration': concentration,
-                        'curve_slope_3m6m': curve_slope,
-                        'delta_oi': delta_oi,
-                        'date': datetime.fromtimestamp(os.path.getmtime(json_file)).strftime('%Y-%m-%d %H:%M'),
-                        'status': 'Success',
-                        'source': 'Cached JSON'
-                    }
-                except Exception as e:
-                    return {'status': 'Error', 'note': str(e)}
-        
-        return {'status': 'Unavailable', 'note': 'Run scrape_shfe_selenium.py'}
+        """Fetch SHFE data from barchart.com + calculate all derived metrics"""
+        try:
+            url = 'https://www.barchart.com/futures/quotes/XOH26/overview'
+            headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'}
+            resp = requests.get(url, headers=headers, timeout=15)
+            
+            import re
+            cny_rate = yf.Ticker('CNY=X').history(period='1d')['Close'].iloc[-1]
+            
+            # Extract price
+            price_match = re.search(r'"lastPrice":([0-9,]+)', resp.text)
+            if not price_match:
+                return {'status': 'Error', 'note': 'Price not found on barchart'}
+            
+            price_cny = float(price_match.group(1).replace(',', ''))
+            price_usd_oz = round((price_cny / cny_rate) / 32.1507, 2)
+            
+            # Extract volume and OI
+            raw = re.search(r'&quot;raw&quot;:\{[^}]*&quot;volume&quot;:([0-9]+)[^}]*&quot;openInterest&quot;:([0-9]+)', resp.text)
+            if not raw:
+                return {'status': 'Error', 'note': 'Volume/OI not found on barchart'}
+            
+            volume = int(raw.group(1))
+            oi = int(raw.group(2))
+            
+            # Calculate metrics
+            turnover = round(volume / oi, 4) if oi > 0 else 0
+            
+            # Delta OI from previous stored value
+            delta_oi = self.storage.get_delta('OI_ag2603')
+            
+            return {
+                'contract': 'ag2603',
+                'price': price_cny,
+                'price_usd_oz': price_usd_oz,
+                'oi': oi,
+                'volume': volume,
+                'turnover_ratio': turnover,
+                'delta_oi': delta_oi,
+                'cny_rate': round(cny_rate, 4),
+                'status': 'Success',
+                'source': 'Barchart Live'
+            }
+            
+        except Exception as e:
+            return {'status': 'Error', 'note': str(e)}
 
     def backfill_history(self):
         """

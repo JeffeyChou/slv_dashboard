@@ -333,12 +333,28 @@ def main():
                 comex['delta_oi'] = futures_data.get('delta_oi')
                 print(f"✓ COMEX OI Delta: {comex.get('delta_oi')}")
         
-        # Get SHFE data with OI delta
+        # Get SHFE data with OI delta - use the barchart data, not JSON file
         shfe_data = fetcher.get_shfe_data()
         if shfe_data and shfe_data.get('status') == 'Success':
             if shfe:
+                # Use the live barchart data but get delta from database
                 shfe['delta_oi'] = shfe_data.get('delta_oi')
                 print(f"✓ SHFE OI Delta: {shfe.get('delta_oi')}")
+            else:
+                # If no SHFE data from hourly fetch, use the main fetcher data
+                shfe = {
+                    'price_usd_oz': round((shfe_data.get('price', 0) / 6.96) / 32.1507, 2) if shfe_data.get('price') else None,
+                    'price_cny_kg': shfe_data.get('price'),
+                    'volume': shfe_data.get('volume'),
+                    'oi': shfe_data.get('oi'),
+                    'delta_oi': shfe_data.get('delta_oi'),
+                    'change_pct': 0  # Default since we don't have this from main fetcher
+                }
+        else:
+            # Fallback: if main fetcher fails, keep the barchart data but no delta
+            if shfe:
+                shfe['delta_oi'] = None
+                print("⚠ SHFE OI Delta: Not available (main fetcher failed)")
         
         # Get 3-day delivery data
         delivery_3days = fetcher.pdf_parser.parse_last_3_days_silver()
