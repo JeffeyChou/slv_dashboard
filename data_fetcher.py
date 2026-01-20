@@ -159,12 +159,19 @@ class SilverDataFetcher:
                 future = yf.Ticker('SIH26.CMX')
                 info = future.info
 
+            # Calculate OI delta
+            current_oi = info.get('openInterest')
+            delta_oi = None
+            if current_oi:
+                delta_oi = self.storage.get_delta('COMEX_Futures_OI')
+
             return {
                 'contract': 'SI=F (Active)',
                 'price': info.get('regularMarketPrice'),
-                'open_interest': info.get('openInterest'),
+                'open_interest': current_oi,
                 'volume': info.get('volume'),
                 'previous_close': info.get('previousClose'),
+                'delta_oi': delta_oi,
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
         except Exception as e:
@@ -226,6 +233,7 @@ class SilverDataFetcher:
                 reg_to_total = (total_registered / total) if total > 0 else 0
                 
                 delta_registered = self.storage.get_delta('COMEX_Silver_Registered')
+                delta_eligible = self.storage.get_delta('COMEX_Silver_Eligible')
                 
                 result = {
                     'registered': total_registered,
@@ -233,6 +241,7 @@ class SilverDataFetcher:
                     'total': total,
                     'registered_to_total_ratio': round(reg_to_total, 4),
                     'delta_registered': delta_registered,
+                    'delta_eligible': delta_eligible,
                     'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                     'source': 'Live'
                 }
@@ -548,6 +557,11 @@ class SilverDataFetcher:
             p0_data['ΔCOMEX_Registered'] = cme.get('delta_registered')
             p0_data['Registered_to_Total'] = cme.get('registered_to_total_ratio')
         
+        # COMEX Futures OI tracking
+        if futures.get('open_interest'):
+            p0_data['COMEX_Futures_OI'] = futures.get('open_interest')
+            p0_data['ΔCOMEX_Futures_OI'] = futures.get('delta_oi')
+        
         # Basis & Premium (use real-time spot)
         if futures.get('price') and not futures.get('error'):
             p0_data['COMEX_Futures_Price'] = futures.get('price')
@@ -616,6 +630,17 @@ class SilverDataFetcher:
         if delivery_mtd.get('found'):
             p0_data['COMEX_Deliveries_MTD'] = delivery_mtd.get('mtd_issued', 0)
         
+        # Last 3 Days Silver Delivery Data
+        cache_key_3days = 'cme_delivery_3days'
+        cached_3days = self._read_cache(cache_key_3days)
+        
+        if cached_3days and self._is_cache_valid(self._get_cache_path(cache_key_3days), ttl_minutes=1440):
+            delivery_3days = cached_3days
+        else:
+            delivery_3days = self.pdf_parser.parse_last_3_days_silver()
+            if not delivery_3days.get('error'):
+                self._write_cache(cache_key_3days, delivery_3days)
+        
         # Store to time series
         self.storage.append_data(p0_data)
         
@@ -634,6 +659,7 @@ class SilverDataFetcher:
             'metals_baseline': metals_baseline,  # 8-hour metals.dev cache
             'realtime_spot': realtime_spot,  # Real-time futures proxy
             'p0_indicators': p0_data,
+            'delivery_3days': delivery_3days,  # Last 3 days COMEX silver delivery data
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         }
 

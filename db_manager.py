@@ -36,3 +36,21 @@ class DBManager:
                 (days,)
             )
             return [dict(row) for row in cursor.fetchall()]
+    
+    def get_last_different_value(self, source, current_value, field='raw_data', key='holdings_oz'):
+        """Get the last value that's different from current_value"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                f"SELECT {field} FROM silver_data WHERE source = ? ORDER BY timestamp DESC LIMIT 50",
+                (source,)
+            )
+            import json
+            for row in cursor.fetchall():
+                if row[0]:
+                    try:
+                        data = json.loads(row[0])
+                        if data.get(key) and data[key] != current_value:
+                            return data[key]
+                    except:
+                        pass
+            return None

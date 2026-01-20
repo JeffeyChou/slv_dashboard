@@ -1,11 +1,21 @@
 import time
 import csv
 import json
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+def is_market_hours():
+    """Check if current time is Monday-Friday, 8 AM - 8 PM"""
+    now = datetime.now()
+    if now.weekday() >= 5:  # Saturday or Sunday
+        return False
+    if now.hour < 8 or now.hour >= 20:  # Before 8 AM or after 8 PM
+        return False
+    return True
 
 def scrape_shfe_data():
     # URL to scrape
@@ -82,4 +92,7 @@ def scrape_shfe_data():
         driver.quit()
 
 if __name__ == "__main__":
-    scrape_shfe_data()
+    if not is_market_hours():
+        print("Outside market hours (Mon-Fri, 8 AM - 8 PM). Skipping scrape.")
+    else:
+        scrape_shfe_data()
