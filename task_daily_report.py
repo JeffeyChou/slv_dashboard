@@ -22,139 +22,6 @@ import numpy as np
 
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-# Historical data for GLD daily changes (from user's data)
-# Format: (date_str, change_tonnes)
-GLD_HISTORICAL_CHANGES = [
-    ("2026-01-21", -4.00),
-    ("2026-01-20", -4.01),
-    ("2026-01-19", 0.00),
-    ("2026-01-16", 10.87),
-    ("2026-01-15", 0.57),
-    ("2026-01-14", 0.00),
-    ("2026-01-13", 3.43),
-    ("2026-01-12", 6.24),
-    ("2026-01-09", -2.57),
-    ("2026-01-08", 0.00),
-    ("2026-01-07", 0.00),
-    ("2026-01-06", 2.00),
-    ("2026-01-05", 0.00),
-    ("2026-01-02", -5.43),
-    ("2026-01-01", 0.00),
-    ("2025-12-31", -1.43),
-    ("2025-12-30", 0.00),
-    ("2025-12-29", 0.86),
-    ("2025-12-26", 2.86),
-    ("2025-12-25", 0.00),
-]
-
-# GLD total holdings - actual data from user (tonnes)
-GLD_HISTORICAL_HOLDINGS = [
-    ("2026-01-21", 1077.66),
-    ("2026-01-20", 1081.66),
-    ("2026-01-19", 1085.67),
-    ("2026-01-16", 1085.67),
-    ("2026-01-15", 1074.80),
-    ("2026-01-14", 1074.23),
-    ("2026-01-13", 1074.23),
-    ("2026-01-12", 1070.80),
-    ("2026-01-09", 1064.56),
-    ("2026-01-08", 1067.13),
-    ("2026-01-07", 1067.13),
-    ("2026-01-06", 1067.13),
-    ("2026-01-05", 1065.13),
-    ("2026-01-02", 1065.13),
-    ("2026-01-01", 1070.56),
-    ("2025-12-31", 1070.56),
-    ("2025-12-30", 1071.99),
-    ("2025-12-29", 1071.99),
-    ("2025-12-26", 1071.13),
-    ("2025-12-25", 1068.27),
-]
-
-# SLV daily changes - corrected data from user
-SLV_HISTORICAL_CHANGES = [
-    ("2026-01-21", -56.38),
-    ("2026-01-20", 149.42),
-    ("2026-01-16", 11.28),
-    ("2026-01-15", -180.44),
-    ("2026-01-14", -78.94),
-    ("2026-01-13", -26.79),
-    ("2026-01-12", 39.47),
-    ("2026-01-09", 93.05),
-    ("2026-01-08", 115.60),
-    ("2026-01-07", -18.33),
-    ("2026-01-06", -235.44),
-    ("2026-01-05", -90.54),
-    ("2025-12-31", -11.28),
-    ("2025-12-30", 149.46),
-    ("2025-12-29", -84.60),
-]
-
-# SLV total holdings - actual data from user (tonnes)
-SLV_HISTORICAL_HOLDINGS = [
-    ("2026-01-21", 16166.10),
-    ("2026-01-20", 16222.48),
-    ("2026-01-16", 16073.06),
-    ("2026-01-15", 16061.78),
-    ("2026-01-14", 16242.22),
-    ("2026-01-13", 16321.16),
-    ("2026-01-12", 16347.95),
-    ("2026-01-09", 16308.48),
-    ("2026-01-08", 16215.43),
-    ("2026-01-07", 16099.83),
-    ("2026-01-06", 16118.16),
-    ("2026-01-05", 16353.60),
-    ("2025-12-31", 16444.14),
-    ("2025-12-30", 16455.42),
-    ("2025-12-29", 16305.96),
-]
-
-# Current holdings values
-GLD_CURRENT_TONNES = 1077.66
-SLV_CURRENT_TONNES = 16166.10
-
-
-def seed_historical_data():
-    """Seed database with historical ETF holdings data from the image"""
-    db = DBManager()
-
-    # Calculate GLD historical holdings (working backwards from current)
-    gld_holdings = GLD_CURRENT_TONNES
-    gld_history = []
-    for date_str, change in GLD_HISTORICAL_CHANGES:
-        gld_history.append((date_str, gld_holdings))
-        gld_holdings -= change  # Go backwards
-
-    # Calculate SLV historical holdings (working backwards from current)
-    slv_holdings = SLV_CURRENT_TONNES
-    slv_history = []
-    for date_str, change in SLV_HISTORICAL_CHANGES:
-        slv_history.append((date_str, slv_holdings))
-        slv_holdings -= change  # Go backwards
-
-    # Store in metrics table
-    for date_str, tonnes in gld_history:
-        db.append_metrics(
-            {
-                "GLD_Holdings_Tonnes": tonnes,
-                "GLD_Daily_Change_Tonnes": next(
-                    (c for d, c in GLD_HISTORICAL_CHANGES if d == date_str), 0
-                ),
-            }
-        )
-
-    for date_str, tonnes in slv_history:
-        db.append_metrics(
-            {
-                "SLV_Holdings_Tonnes": tonnes,
-                "SLV_Daily_Change_Tonnes": next(
-                    (c for d, c in SLV_HISTORICAL_CHANGES if d == date_str), 0
-                ),
-            }
-        )
-
-    print("✓ Historical data seeded")
-
 
 def get_daily_data(days=30):
     """Get daily aggregated data from database"""
@@ -185,37 +52,59 @@ def get_daily_data(days=30):
 
 
 def get_etf_changes_data():
-    """Get ETF daily changes data - uses historical constants only (verified data)"""
-    # Use only verified historical data from constants
-    gld_changes = {
-        datetime.strptime(d, "%Y-%m-%d").date(): c for d, c in GLD_HISTORICAL_CHANGES
-    }
-    slv_changes = {
-        datetime.strptime(d, "%Y-%m-%d").date(): c for d, c in SLV_HISTORICAL_CHANGES
-    }
+    """Get ETF daily changes data from database"""
+    db = DBManager()
+
+    # Fetch GLD changes
+    gld_history = db.get_metric_history("GLD_Daily_Change_Tonnes", days=90)
+    gld_changes = {}
+    for record in gld_history:
+        try:
+            dt = datetime.strptime(record["timestamp"], "%Y-%m-%d %H:%M:%S")
+            gld_changes[dt.date()] = record["value"]
+        except ValueError:
+            continue
+
+    # Fetch SLV changes
+    slv_history = db.get_metric_history("SLV_Daily_Change_Tonnes", days=90)
+    slv_changes = {}
+    for record in slv_history:
+        try:
+            dt = datetime.strptime(record["timestamp"], "%Y-%m-%d %H:%M:%S")
+            slv_changes[dt.date()] = record["value"]
+        except ValueError:
+            continue
 
     return gld_changes, slv_changes
 
 
 def get_etf_holdings_data():
-    """Get ETF holdings time series - uses actual data for both GLD and SLV"""
-    # Use actual GLD holdings data from user
+    """Get ETF holdings time series from database"""
+    db = DBManager()
+
+    # Fetch GLD holdings
+    gld_history = db.get_metric_history("GLD_Holdings_Tonnes", days=90)
     gld_dates = []
     gld_holdings = []
+    for record in gld_history:
+        try:
+            dt = datetime.strptime(record["timestamp"], "%Y-%m-%d %H:%M:%S")
+            gld_dates.append(dt.date())
+            gld_holdings.append(record["value"])
+        except ValueError:
+            continue
 
-    for date_str, holdings in GLD_HISTORICAL_HOLDINGS:
-        date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        gld_dates.append(date)
-        gld_holdings.append(holdings)
-
-    # Use actual SLV holdings data from user
+    # Fetch SLV holdings
+    slv_history = db.get_metric_history("SLV_Holdings_Tonnes", days=90)
     slv_dates = []
     slv_holdings = []
-
-    for date_str, holdings in SLV_HISTORICAL_HOLDINGS:
-        date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        slv_dates.append(date)
-        slv_holdings.append(holdings)
+    for record in slv_history:
+        try:
+            dt = datetime.strptime(record["timestamp"], "%Y-%m-%d %H:%M:%S")
+            slv_dates.append(dt.date())
+            slv_holdings.append(record["value"])
+        except ValueError:
+            continue
 
     return (gld_dates, gld_holdings), (slv_dates, slv_holdings)
 
@@ -237,6 +126,9 @@ def generate_etf_holdings_charts():
     gld_dates_sorted = [d for d, h in sorted_gld]
     gld_holdings_sorted = [h for d, h in sorted_gld]
 
+    # Get current tonnes
+    current_gld_tonnes = gld_holdings_sorted[-1] if gld_holdings_sorted else 0
+
     ax1.plot(
         gld_dates_sorted,
         gld_holdings_sorted,
@@ -247,7 +139,7 @@ def generate_etf_holdings_charts():
     )
     ax1.fill_between(gld_dates_sorted, gld_holdings_sorted, alpha=0.1, color="#FF6B35")
     ax1.set_title(
-        f"GLD Holdings: {GLD_CURRENT_TONNES:,.2f} tonnes",
+        f"GLD Holdings: {current_gld_tonnes:,.2f} tonnes",
         fontsize=14,
         fontweight="bold",
     )
@@ -269,6 +161,9 @@ def generate_etf_holdings_charts():
     slv_dates_sorted = [d for d, h in sorted_slv]
     slv_holdings_sorted = [h for d, h in sorted_slv]
 
+    # Get current tonnes
+    current_slv_tonnes = slv_holdings_sorted[-1] if slv_holdings_sorted else 0
+
     ax2.plot(
         slv_dates_sorted,
         slv_holdings_sorted,
@@ -279,7 +174,7 @@ def generate_etf_holdings_charts():
     )
     ax2.fill_between(slv_dates_sorted, slv_holdings_sorted, alpha=0.1, color="#4A90D9")
     ax2.set_title(
-        f"SLV Holdings: {SLV_CURRENT_TONNES:,.2f} tonnes",
+        f"SLV Holdings: {current_slv_tonnes:,.2f} tonnes",
         fontsize=14,
         fontweight="bold",
     )
@@ -295,29 +190,39 @@ def generate_etf_holdings_charts():
     # ===== BOTTOM LEFT: GLD Daily Changes Bar Chart =====
     ax3 = axes[1, 0]
 
-    # Sort GLD changes by date (descending for display) - show all available data
-    gld_change_dates = sorted(gld_changes.keys(), reverse=True)[:12]
-    gld_change_values = [gld_changes[d] for d in gld_change_dates]
+    # Filter out zero changes and sort by date (descending)
+    gld_changes_filtered = {d: v for d, v in gld_changes.items() if abs(v) > 0.001}
+    gld_change_dates = sorted(gld_changes_filtered.keys(), reverse=True)[:12]
+    gld_change_values = [gld_changes_filtered[d] for d in gld_change_dates]
     gld_change_labels = [d.strftime("%m-%d") for d in gld_change_dates]
 
-    colors_gld = ["#4CAF50" if v >= 0 else "#F44336" for v in gld_change_values]
-    bars_gld = ax3.barh(
-        gld_change_labels, gld_change_values, color=colors_gld, height=0.6
-    )
-
-    # Add value labels
-    for bar, val in zip(bars_gld, gld_change_values):
-        width = bar.get_width()
-        label_x = width + 0.5 if width >= 0 else width - 0.5
-        ha = "left" if width >= 0 else "right"
-        ax3.text(
-            label_x,
-            bar.get_y() + bar.get_height() / 2,
-            f"{val:+.2f}t",
-            va="center",
-            ha=ha,
-            fontsize=9,
+    if gld_change_values:
+        colors_gld = ["#4CAF50" if v >= 0 else "#F44336" for v in gld_change_values]
+        bars_gld = ax3.barh(
+            gld_change_labels, gld_change_values, color=colors_gld, height=0.6
         )
+
+        # Calculate max absolute value for symmetric x-axis
+        max_val = max(abs(v) for v in gld_change_values)
+        limit = max_val * 1.3  # Add 30% padding
+        ax3.set_xlim(-limit, limit)
+
+        # Add value labels
+        for bar, val in zip(bars_gld, gld_change_values):
+            width = bar.get_width()
+            # Adjust label position based on value
+            label_x = width + (limit * 0.05) if width >= 0 else width - (limit * 0.05)
+            ha = "left" if width >= 0 else "right"
+            ax3.text(
+                label_x,
+                bar.get_y() + bar.get_height() / 2,
+                f"{val:+.2f}t",
+                va="center",
+                ha=ha,
+                fontsize=9,
+            )
+    else:
+        ax3.text(0.5, 0.5, "No recent changes", ha="center", va="center")
 
     ax3.axvline(x=0, color="black", linewidth=0.5)
     ax3.set_title("GLD Daily Changes (tonnes)", fontsize=14, fontweight="bold")
@@ -327,29 +232,39 @@ def generate_etf_holdings_charts():
     # ===== BOTTOM RIGHT: SLV Daily Changes Bar Chart =====
     ax4 = axes[1, 1]
 
-    # Sort SLV changes by date (descending for display) - show all available data
-    slv_change_dates = sorted(slv_changes.keys(), reverse=True)[:12]
-    slv_change_values = [slv_changes[d] for d in slv_change_dates]
+    # Filter out zero changes and sort by date (descending)
+    slv_changes_filtered = {d: v for d, v in slv_changes.items() if abs(v) > 0.001}
+    slv_change_dates = sorted(slv_changes_filtered.keys(), reverse=True)[:12]
+    slv_change_values = [slv_changes_filtered[d] for d in slv_change_dates]
     slv_change_labels = [d.strftime("%m-%d") for d in slv_change_dates]
 
-    colors_slv = ["#4CAF50" if v >= 0 else "#F44336" for v in slv_change_values]
-    bars_slv = ax4.barh(
-        slv_change_labels, slv_change_values, color=colors_slv, height=0.6
-    )
-
-    # Add value labels
-    for bar, val in zip(bars_slv, slv_change_values):
-        width = bar.get_width()
-        label_x = width + 5 if width >= 0 else width - 5
-        ha = "left" if width >= 0 else "right"
-        ax4.text(
-            label_x,
-            bar.get_y() + bar.get_height() / 2,
-            f"{val:+.2f}t",
-            va="center",
-            ha=ha,
-            fontsize=9,
+    if slv_change_values:
+        colors_slv = ["#4CAF50" if v >= 0 else "#F44336" for v in slv_change_values]
+        bars_slv = ax4.barh(
+            slv_change_labels, slv_change_values, color=colors_slv, height=0.6
         )
+
+        # Calculate max absolute value for symmetric x-axis
+        max_val = max(abs(v) for v in slv_change_values)
+        limit = max_val * 1.3  # Add 30% padding
+        ax4.set_xlim(-limit, limit)
+
+        # Add value labels
+        for bar, val in zip(bars_slv, slv_change_values):
+            width = bar.get_width()
+            # Adjust label position based on value
+            label_x = width + (limit * 0.05) if width >= 0 else width - (limit * 0.05)
+            ha = "left" if width >= 0 else "right"
+            ax4.text(
+                label_x,
+                bar.get_y() + bar.get_height() / 2,
+                f"{val:+.2f}t",
+                va="center",
+                ha=ha,
+                fontsize=9,
+            )
+    else:
+        ax4.text(0.5, 0.5, "No recent changes", ha="center", va="center")
 
     ax4.axvline(x=0, color="black", linewidth=0.5)
     ax4.set_title("SLV Daily Changes (tonnes)", fontsize=14, fontweight="bold")

@@ -151,6 +151,20 @@ class DBManager:
             cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
             conn.execute("DELETE FROM metrics WHERE timestamp < ?", (cutoff,))
 
+    def insert_metric(self, timestamp, metric_name, value):
+        """
+        Insert a metric with a specific timestamp.
+        Useful for backfilling historical data.
+        """
+        with self._get_conn() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO metrics (timestamp, metric_name, value)
+                VALUES (?, ?, ?)
+                """,
+                (timestamp, metric_name, value),
+            )
+
     def get_metric_history(self, metric_name, days=30):
         """
         Get historical data for a specific metric.

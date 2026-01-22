@@ -180,10 +180,12 @@ def fetch_comex_inventory():
             if label == "TOTAL REGISTERED":
                 prev_total = float(row.iloc[2])
                 registered = float(row.iloc[7])
+                registered_adjustment = float(row.iloc[6])  # ADJUSTMENT
                 delta_reg = int(registered - prev_total)
             elif label == "TOTAL ELIGIBLE":
                 prev_total = float(row.iloc[2])
                 eligible = float(row.iloc[7])
+                eligible_adjustment = float(row.iloc[6])  # ADJUSTMENT
                 delta_elig = int(eligible - prev_total)
 
         if registered and eligible:
@@ -194,6 +196,8 @@ def fetch_comex_inventory():
                 "reg_ratio": round(registered / (registered + eligible) * 100, 2),
                 "delta_registered": delta_reg if delta_reg is not None else 0,
                 "delta_eligible": delta_elig if delta_elig is not None else 0,
+                "registered_adjustment": registered_adjustment,
+                "eligible_adjustment": eligible_adjustment,
                 "ts": datetime.now().isoformat(),
             }
     except Exception as e:
@@ -221,7 +225,7 @@ def build_discord_message(
     msg = f"**📊 Silver Market Update** - {ts}\n\n"
 
     # Spot & Futures
-    msg += "**💹 Real-time Prices** `[30min]`\n"
+    msg += "**💹 Real-time Prices**\n"
 
     # XAG/USD Spot
     if spot and spot.get("price"):
@@ -235,11 +239,12 @@ def build_discord_message(
     if comex and comex.get("price"):
         msg += f"• COMEX Futures (SIH26): **${comex['price']:.2f}**/oz"
         if comex.get("open_interest"):
-            msg += f" (OI: {comex['open_interest']:,}"
+            msg += f"\n  └ OI: {comex['open_interest']:,}"
             if comex.get("delta_oi") is not None:
-                msg += f" {comex['delta_oi']:+,.0f}"
+                msg += f" ||Delta OI: {comex['delta_oi']:+,.0f}"
             msg += ")"
         msg += "\n"
+        msg += f"  └ Holdings in contract: {(comex['open_interest'] * 5000):,.0f} oz"
 
     # SHFE Ag
     if shfe and shfe.get("status") == "Success":
@@ -250,7 +255,7 @@ def build_discord_message(
         if shfe.get("oi"):
             msg += f"  └ OI: {shfe['oi']:,}"
             if shfe.get("delta_oi") is not None:
-                msg += f" ({shfe['delta_oi']:+,.0f})"
+                msg += f"|| Delta OI: {shfe['delta_oi']:+,.0f}"
             msg += "\n"
         # Shanghai Premium
         if spot and spot.get("price") and shfe.get("price_usd_oz"):
@@ -282,6 +287,7 @@ def build_discord_message(
             delta_t = delta_oz * oz_to_tonnes
             msg += f" ({delta_t:+.2f}t / {delta_oz:+,} oz)"
         msg += "\n"
+        msg += f"          └ Adjustment: {comex_inv['registered_adjustment']:,.0f} oz\n"
 
         msg += f"• COMEX Eligible: **{elig_tonnes:,.2f}** tonnes (**{comex_inv['eligible']:,.0f}** oz)"
         if comex_inv.get("delta_eligible") is not None:
@@ -289,6 +295,7 @@ def build_discord_message(
             delta_t = delta_oz * oz_to_tonnes
             msg += f" ({delta_t:+.2f}t / {delta_oz:+,} oz)"
         msg += "\n"
+        msg += f"          └ Adjustment: {comex_inv['eligible_adjustment']:,.0f} oz\n"
         msg += f"  └ Reg/Total: {comex_inv['reg_ratio']}%\n"
 
     if slv_hold:

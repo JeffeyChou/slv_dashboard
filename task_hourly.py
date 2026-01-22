@@ -269,10 +269,12 @@ def fetch_comex_inventory(db, force=False):
             label = str(row.iloc[0]).strip()
             if label == "TOTAL REGISTERED":
                 prev_total = float(row.iloc[2])  # PREV TOTAL
+                registered_adjustment = float(row.iloc[6])  # ADJUSTMENT
                 registered = float(row.iloc[7])  # TOTAL TODAY
                 delta_reg = int(registered - prev_total)
             elif label == "TOTAL ELIGIBLE":
                 prev_total = float(row.iloc[2])  # PREV TOTAL
+                eligible_adjustment = float(row.iloc[6])  # ADJUSTMENT
                 eligible = float(row.iloc[7])  # TOTAL TODAY
                 delta_elig = int(eligible - prev_total)
 
@@ -280,6 +282,8 @@ def fetch_comex_inventory(db, force=False):
             data = {
                 "registered": registered,
                 "eligible": eligible,
+                "registered_adjustment": registered_adjustment,
+                "eligible_adjustment": eligible_adjustment,
                 "total": registered + eligible,
                 "reg_ratio": round(registered / (registered + eligible) * 100, 2),
                 "delta_registered": delta_reg if delta_reg is not None else 0,
@@ -341,8 +345,10 @@ def send_discord(msg):
         print(f"⚠ Error sending Discord message: {e}")
 
 
-def main():
-    force = "--force" in sys.argv
+def main(force=False):
+    if "--force" in sys.argv:
+        force = True
+
     if force:
         print("Force refresh enabled")
 
@@ -444,7 +450,7 @@ def main():
     msg = f"**📊 Silver Market Update** - {ts}\n\n"
 
     # Spot & Futures (30min)
-    msg += "**💹 Real-time Prices** `[30min]`\n"
+    msg += "**💹 Real-time Prices**\n"
     if xagusd:
         msg += f"• XAG/USD Spot: **${xagusd:.2f}**/oz\n"
     if gold_spot:
@@ -491,6 +497,7 @@ def main():
             delta_t = delta_oz * oz_to_tonnes
             msg += f" ({delta_oz:+,} oz / {delta_t:+.2f}t)"
         msg += "\n"
+        msg += f"          └ Adjustment: {comex_inv['registered_adjustment']:,.0f} oz\n"
 
         msg += f"• COMEX Eligible: **{comex_inv['eligible']:,.0f}** oz"
         if comex_inv.get("delta_eligible") is not None:
@@ -498,6 +505,7 @@ def main():
             delta_t = delta_oz * oz_to_tonnes
             msg += f" ({delta_oz:+,} oz / {delta_t:+.2f}t)"
         msg += "\n"
+        msg += f"          └ Adjustment: {comex_inv['eligible_adjustment']:,.0f} oz\n"
         msg += f"  └ Reg/Total: {comex_inv['reg_ratio']}%\n"
     if slv_hold:
         oz_to_tonnes = 0.0000311035
