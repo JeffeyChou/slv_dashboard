@@ -38,10 +38,47 @@ def write_cache(db, name, data):
 # ============ HOURLY DATA (Real-time) ============
 
 
+def fetch_metals_dev_price(metal, currency="USD"):
+    """Fetch price from metals.dev API"""
+    api_key = os.getenv("METALS_DEV_KEY")
+    if not api_key:
+        return None
+
+    try:
+        url = "https://api.metals.dev/v1/latest"
+        headers = {"Accept": "application/json"}
+        params = {"api_key": api_key, "currency": currency, "unit": "toz"}
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("metals", {}).get(metal)
+    except Exception as e:
+        print(f"⚠ Metals.dev failed: {e}")
+    return None
+
+
 def fetch_xagusd():
-    """XAG/USD spot price"""
+    """XAG/USD spot price - Try Barchart first, then Metals.dev, then YF"""
+    # 1. Try Barchart (via SilverDataFetcher)
+    try:
+        fetcher = SilverDataFetcher()
+        data = fetcher.get_spot_xagusd()
+        if data and data.get("price"):
+            return data["price"]
+    except Exception as e:
+        print(f"⚠ Barchart XAG failed: {e}")
+
+    # 2. Try Metals.dev
+    price = fetch_metals_dev_price("silver")
+    if price:
+        return price
+
+    # 3. Fallback to Yahoo Finance
     try:
         t = yf.Ticker("SI=F")
+        # Add custom headers to avoid 429
+        t.session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         return t.info.get("regularMarketPrice")
     except:
         return None
@@ -84,9 +121,26 @@ def fetch_shanghai_td():
 
 
 def fetch_comex_futures():
-    """COMEX silver futures"""
+    """COMEX silver futures - Try Barchart first, then YF"""
+    # 1. Try Barchart (via SilverDataFetcher)
+    try:
+        fetcher = SilverDataFetcher()
+        data = fetcher.get_futures_data()
+        if data and data.get("price"):
+            return {
+                "price": data["price"],
+                "volume": data.get("volume", 0),
+                "oi": data.get("open_interest", 0),
+                "prev_close": data.get("previous_close"),
+                "delta_oi": data.get("delta_oi"),
+            }
+    except Exception as e:
+        print(f"⚠ Barchart COMEX failed: {e}")
+
+    # 2. Fallback to Yahoo Finance
     try:
         si = yf.Ticker("SI=F")
+        si.session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         info = si.info
         return {
             "price": info.get("regularMarketPrice"),
@@ -102,6 +156,7 @@ def fetch_slv_price():
     """SLV ETF price only (hourly)"""
     try:
         slv = yf.Ticker("SLV")
+        slv.session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         info = slv.info
         return {
             "price": info.get("regularMarketPrice"),
@@ -123,6 +178,7 @@ def fetch_gld_price():
     """GLD ETF price only (hourly)"""
     try:
         gld = yf.Ticker("GLD")
+        gld.session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         info = gld.info
         return {
             "price": info.get("regularMarketPrice"),
@@ -141,9 +197,16 @@ def fetch_gld_price():
 
 
 def fetch_gold_spot():
-    """Gold spot price (hourly)"""
+    """Gold spot price (hourly) - Try Metals.dev first, then YF"""
+    # 1. Try Metals.dev
+    price = fetch_metals_dev_price("gold")
+    if price:
+        return price
+
+    # 2. Fallback to Yahoo Finance
     try:
         gc = yf.Ticker("GC=F")
+        gc.session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         hist = gc.history(period="1d")
         if not hist.empty:
             return round(hist["Close"].iloc[-1], 2)
