@@ -1,4 +1,3 @@
-import yfinance as yf
 import requests
 from bs4 import BeautifulSoup
 import re
@@ -12,19 +11,19 @@ from cme_pdf_parser import CMEDeliveryParser
 
 class SilverDataFetcher:
     """
-    Fetches silver market data from multiple sources.
+    Fetches silver market data from Barchart and other sources.
 
-    Used methods:
-    - get_futures_data() - COMEX futures with OI delta
-    - get_slv_data() - SLV ETF holdings
-    - get_cme_data() - COMEX inventory
-    - get_shfe_data() - SHFE data from barchart
-    - get_all_data_and_store() - Aggregate all data
+    Data sources:
+    - XAG/USD Spot: https://www.barchart.com/forex/quotes/%5EXAGUSD/overview
+    - COMEX Futures (SIH26): https://www.barchart.com/futures/quotes/SIH26/overview
+    - SHFE Ag (XOH26): https://www.barchart.com/futures/quotes/XOH26/overview
+    - SLV Holdings: iShares website
+    - COMEX Inventory: CME delivery reports
     """
 
     def __init__(self, cache_dir="./cache", db_manager=None):
         self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
         self.cache_dir = cache_dir
         self.db = db_manager
@@ -52,7 +51,7 @@ class SilverDataFetcher:
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except Exception:
             return None
 
     def _write_cache(self, key, data):
@@ -63,36 +62,187 @@ class SilverDataFetcher:
         except Exception as e:
             print(f"Warning: Could not write cache for {key}: {e}")
 
-    def get_futures_data(self):
-        """Fetch COMEX futures data with OI delta calculation."""
+    def _fetch_barchart_data(self, url, symbol_name):
+        """
+        Generic method to fetch data from Barchart.
+        Returns dict with: lastPrice, openInterest, volume, percentChange
+        """
         try:
-            future = yf.Ticker("SI=F")
-            info = future.info
+            resp = requests.get(url, headers=self.headers, timeout=15)
+            if resp.status_code != 200:
+                return {"error": f"HTTP {resp.status_code}"}
 
-            if not info.get("regularMarketPrice"):
-                future = yf.Ticker("SIH26.CMX")
-                info = future.info
+            data = {}
 
-            # Calculate OI delta from database
-            current_oi = info.get("openInterest")
-            delta_oi = None
-            if current_oi:
-                delta_oi = self.db.get_metric_delta("COMEX_Futures_OI")
+            # Extract lastPrice
+            price_match = re.search(r'"lastPrice":"?([0-9,\.]+)"?', resp.text)
+            if price_match:
+                data["lastPrice"] = float(price_match.group(1).replace(",", ""))
 
-            return {
-                "contract": "SI=F (Active)",
-                "price": info.get("regularMarketPrice"),
-                "open_interest": current_oi,
-                "volume": info.get("volume"),
-                "previous_close": info.get("previousClose"),
-                "delta_oi": delta_oi,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
+            # Extract percentChange
+            pct_match = re.search(r'"percentChange":"?(-?[0-9\.]+)"?', resp.text)
+            if pct_match:
+                data["percentChange"] = float(pct_match.group(1))
+
+            # Extract openInterest (for futures)
+            # Try multiple patterns
+            oi_match = re.search(r'"openInterest":"?([0-9,]+)"?', resp.text)
+            if oi_match:
+                data["openInterest"] = int(oi_match.group(1).replace(",", ""))
+            else:
+                # Alternative pattern in raw data
+                raw_oi = re.search(r"&quot;openInterest&quot;:([0-9]+)", resp.text)
+                if raw_oi:
+                    data["openInterest"] = int(raw_oi.group(1))
+
+            # Extract volume
+            vol_match = re.search(r'"volume":"?([0-9,]+)"?', resp.text)
+            if vol_match:
+                data["volume"] = int(vol_match.group(1).replace(",", ""))
+            else:
+                raw_vol = re.search(r"&quot;volume&quot;:([0-9]+)", resp.text)
+                if raw_vol:
+                    data["volume"] = int(raw_vol.group(1))
+
+            # Extract previousClose
+            prev_match = re.search(r'"previousClose":"?([0-9,\.]+)"?', resp.text)
+            if prev_match:
+                data["previousClose"] = float(prev_match.group(1).replace(",", ""))
+
+            data["symbol"] = symbol_name
+            data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            data["source"] = "Barchart"
+
+            return data
+
         except Exception as e:
             return {"error": str(e)}
 
+    def get_spot_xagusd(self):
+        """
+        Fetch XAG/USD spot price from Barchart.
+        Source: https://www.barchart.com/forex/quotes/%5EXAGUSD/overview
+        """
+        url = "https://www.barchart.com/forex/quotes/%5EXAGUSD/overview"
+        data = self._fetch_barchart_data(url, "XAGUSD")
+
+        if data.get("error"):
+            return data
+
+        result = {
+            "price": data.get("lastPrice"),
+            "change_pct": data.get("percentChange"),
+            "previous_close": data.get("previousClose"),
+            "timestamp": data.get("timestamp"),
+            "source": "Barchart",
+        }
+
+        # Store to database
+        if result.get("price"):
+            self.db.insert(
+                "XAGUSD_SPOT", price=result["price"], raw_data=json.dumps(result)
+            )
+            self.db.append_metrics({"XAGUSD_Spot": result["price"]})
+
+        return result
+
+    def get_futures_data(self):
+        """
+        Fetch COMEX Silver Futures (SIH26 - March 2026) from Barchart.
+        Source: https://www.barchart.com/futures/quotes/SIH26/overview
+        """
+        url = "https://www.barchart.com/futures/quotes/SIH26/overview"
+        data = self._fetch_barchart_data(url, "SIH26")
+
+        if data.get("error"):
+            return data
+
+        current_oi = data.get("openInterest")
+        delta_oi = None
+        if current_oi:
+            delta_oi = self.db.get_metric_delta("COMEX_Futures_OI")
+
+        result = {
+            "contract": "SIH26 (Mar 2026)",
+            "price": data.get("lastPrice"),
+            "open_interest": current_oi,
+            "volume": data.get("volume"),
+            "previous_close": data.get("previousClose"),
+            "change_pct": data.get("percentChange"),
+            "delta_oi": delta_oi,
+            "timestamp": data.get("timestamp"),
+            "source": "Barchart",
+        }
+
+        # Store to database
+        if result.get("price"):
+            self.db.insert(
+                "COMEX_FUTURES", price=result["price"], raw_data=json.dumps(result)
+            )
+        if current_oi:
+            self.db.append_metrics(
+                {"COMEX_Futures_OI": current_oi, "COMEX_Futures_Price": result["price"]}
+            )
+
+        return result
+
+    def get_shfe_data(self):
+        """
+        Fetch SHFE Silver Futures (XOH26 - March 2026) from Barchart.
+        Source: https://www.barchart.com/futures/quotes/XOH26/overview
+        Returns price in CNY/kg, converted to USD/oz.
+        """
+        url = "https://www.barchart.com/futures/quotes/XOH26/overview"
+        data = self._fetch_barchart_data(url, "XOH26")
+
+        if data.get("error"):
+            return {"status": "Error", "note": data.get("error")}
+
+        price_cny = data.get("lastPrice")
+        if not price_cny:
+            return {"status": "Error", "note": "Price not found"}
+
+        # Get CNY/USD rate for conversion
+        try:
+            import yfinance as yf
+
+            cny_rate = yf.Ticker("CNY=X").history(period="1d")["Close"].iloc[-1]
+        except Exception:
+            cny_rate = 7.25  # Fallback rate
+
+        # Convert CNY/kg to USD/oz
+        # 1 kg = 32.1507 oz
+        price_usd_oz = round((price_cny / cny_rate) / 32.1507, 2)
+
+        current_oi = data.get("openInterest")
+        delta_oi = None
+        if current_oi:
+            delta_oi = self.db.get_metric_delta("OI_ag2603")
+
+        result = {
+            "contract": "ag2603 (XOH26)",
+            "price": price_cny,
+            "price_usd_oz": price_usd_oz,
+            "oi": current_oi,
+            "delta_oi": delta_oi,
+            "change_pct": data.get("percentChange"),
+            "cny_rate": round(cny_rate, 4),
+            "timestamp": data.get("timestamp"),
+            "status": "Success",
+            "source": "Barchart",
+        }
+
+        # Store to database
+        if current_oi:
+            self.db.append_metrics(
+                {"OI_ag2603": current_oi, "SHFE_ag2603_Price": price_cny}
+            )
+        self.db.insert("SHFE", raw_data=json.dumps(result))
+
+        return result
+
     def get_slv_data(self):
-        """Fetch SLV ETF holdings data."""
+        """Fetch SLV ETF holdings data from iShares."""
         url = "https://www.ishares.com/us/products/239855/ishares-silver-trust-fund"
         try:
             response = requests.get(url, headers=self.headers, timeout=10)
@@ -172,57 +322,6 @@ class SilverDataFetcher:
         except Exception as e:
             return {"error": str(e)}
 
-    def get_shfe_data(self):
-        """Fetch SHFE data from barchart.com with delta calculation."""
-        try:
-            url = "https://www.barchart.com/futures/quotes/XOH26/overview"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
-            }
-            resp = requests.get(url, headers=headers, timeout=15)
-
-            cny_rate = yf.Ticker("CNY=X").history(period="1d")["Close"].iloc[-1]
-
-            # Extract price
-            price_match = re.search(r'"lastPrice":([0-9,]+)', resp.text)
-            if not price_match:
-                return {"status": "Error", "note": "Price not found on barchart"}
-
-            price_cny = float(price_match.group(1).replace(",", ""))
-            price_usd_oz = round((price_cny / cny_rate) / 32.1507, 2)
-
-            # Extract volume and OI
-            raw = re.search(
-                r"&quot;raw&quot;:\{[^}]*&quot;volume&quot;:([0-9]+)[^}]*&quot;openInterest&quot;:([0-9]+)",
-                resp.text,
-            )
-            if not raw:
-                return {"status": "Error", "note": "Volume/OI not found on barchart"}
-
-            volume = int(raw.group(1))
-            oi = int(raw.group(2))
-
-            turnover = round(volume / oi, 4) if oi > 0 else 0
-
-            # Delta OI from database
-            delta_oi = self.db.get_metric_delta("OI_ag2603")
-
-            return {
-                "contract": "ag2603",
-                "price": price_cny,
-                "price_usd_oz": price_usd_oz,
-                "oi": oi,
-                "volume": volume,
-                "turnover_ratio": turnover,
-                "delta_oi": delta_oi,
-                "cny_rate": round(cny_rate, 4),
-                "status": "Success",
-                "source": "Barchart Live",
-            }
-
-        except Exception as e:
-            return {"status": "Error", "note": str(e)}
-
     def _convert_tonnes_to_ounces(self, tonnes_str):
         try:
             if tonnes_str == "N/A":
@@ -230,29 +329,32 @@ class SilverDataFetcher:
             tonnes = float(str(tonnes_str).replace(",", ""))
             ounces = tonnes * 32150.7
             return ounces
-        except:
+        except Exception:
             return None
 
     def get_all_data_and_store(self):
         """
         Fetch all data, calculate P0 indicators, and store to database.
-        Simplified version - removed unused API calls.
         """
-        # Fetch base data
-        shfe = self.get_shfe_data()
-        cme = self.get_cme_data()
+        # Fetch all data from Barchart
+        spot = self.get_spot_xagusd()
         futures = self.get_futures_data()
+        shfe = self.get_shfe_data()
+
+        # Other data sources
+        cme = self.get_cme_data()
         slv = self.get_slv_data()
 
         # Calculate P0 indicators
         p0_data = {}
 
+        # Spot price
+        if spot.get("price") and not spot.get("error"):
+            p0_data["XAGUSD_Spot"] = spot.get("price")
+
         # SHFE metrics
         if shfe.get("status") == "Success":
             p0_data["OI_ag2603"] = shfe.get("oi")
-            p0_data["VOL_ag2603"] = shfe.get("volume")
-            p0_data["Turnover_ag2603"] = shfe.get("turnover_ratio")
-            p0_data["ΔOI_ag2603"] = shfe.get("delta_oi")
             p0_data["SHFE_ag2603_Price"] = shfe.get("price")
 
         # COMEX metrics
@@ -267,10 +369,8 @@ class SilverDataFetcher:
             p0_data["COMEX_Futures_OI"] = futures.get("open_interest")
             p0_data["ΔCOMEX_Futures_OI"] = futures.get("delta_oi")
 
-        # Price data
         if futures.get("price") and not futures.get("error"):
             p0_data["COMEX_Futures_Price"] = futures.get("price")
-            p0_data["XAGUSD_Spot"] = futures.get("price")  # Use futures as spot proxy
 
         # Paper to Physical ratio
         if futures.get("open_interest") and cme.get("registered"):
@@ -302,10 +402,11 @@ class SilverDataFetcher:
         self.db.append_metrics(p0_data)
 
         return {
+            "spot": spot,
             "futures": futures,
+            "shfe": shfe,
             "slv": slv,
             "cme": cme,
-            "shfe": shfe,
             "p0_indicators": p0_data,
             "delivery_3days": delivery_3days,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
