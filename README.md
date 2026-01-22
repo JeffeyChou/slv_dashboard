@@ -5,21 +5,21 @@ Real-time silver market intelligence bot with OI tracking, delivery data, and Di
 ## Quick Start
 
 ```bash
-# Activate virtual environment
-source venv_scraper/bin/activate
-
-# Set Discord webhook URL
+# Set Discord credentials
 export DISCORD_WEBHOOK_URL="your_webhook_url_here"
+export DISCORD_BOT_TOKEN="your_bot_token_here"
 
-# Run hourly update
-python discord_bot.py --force
-
-# Or run directly
-python task_hourly.py --force
+# Run the bot
+python discord_bot.py
 ```
 
 ## Features
 
+- **Slash Commands**:
+    - `/update_data`: Force refresh all market data and send report immediately
+    - `/update_plot`: Generate and send the latest ETF holdings chart
+    - `/autorun_on`: Enable automatic hourly updates (runs every 60 mins)
+    - `/autorun_off`: Disable automatic updates
 - **Real-time Prices**: XAG/USD, COMEX Futures, SHFE Silver, SLV/GLD ETF
 - **OI Change Tracking**: COMEX and SHFE Open Interest deltas
 - **Physical Holdings**: COMEX inventory, SLV/GLD trust holdings
@@ -75,7 +75,7 @@ Metrics:
 
 ```
 slv_dashboard/
-├── discord_bot.py       # Entry point
+├── discord_bot.py       # Main Bot with Slash Commands
 ├── task_hourly.py       # Hourly data fetch + Discord posting
 ├── task_daily_report.py # Daily chart generation
 ├── data_fetcher.py      # SilverDataFetcher class
@@ -90,52 +90,40 @@ slv_dashboard/
 └── cache/               # Discord message ID file
 ```
 
-## Cron Setup
+## Automation
 
-```bash
-crontab -e
-```
+You can choose between two automation methods:
 
-Add:
-```bash
-# Hourly updates (every hour at minute 0)
-0 * * * * /path/to/slv_dashboard/run_hourly.sh >> /path/to/scraper.log 2>&1
+1.  **Internal Scheduler (Recommended)**:
+    *   Run `python discord_bot.py`
+    *   Type `/autorun_on` in Discord to enable hourly updates.
+    *   The bot will run continuously and update data every 60 minutes.
 
-# Daily report at 4:30 PM EST (21:30 UTC)
-30 21 * * * /path/to/slv_dashboard/run_daily.sh >> /path/to/report.log 2>&1
-```
+2.  **External Cron**:
+    *   Use `crontab` to schedule `run_hourly.sh` and `run_daily.sh`.
+    *   Note: This requires the bot script to be running separately if you want slash commands.
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DISCORD_WEBHOOK_URL` | Yes | Discord webhook URL |
+| `DISCORD_BOT_TOKEN` | Yes | Discord Bot Token (for slash commands) |
 | `METALS_DEV_KEY` | No | metals.dev API key (100 calls/month) |
-
-## API Limits
-
-| API | Limit | Strategy |
-|-----|-------|----------|
-| metals.dev | 100/month | 8-hour cache |
-| CME PDF | May timeout | 24h cache + stale fallback |
-| SHFE | IP restricted | Best effort |
-| yfinance | Generous | Normal use |
 
 ## Installation
 
 ```bash
 # Clone and setup
 cd slv_dashboard
-python -m venv venv_scraper
-source venv_scraper/bin/activate
 pip install -r requirements.txt
 
 # Configure
 cp .env.template .env
-nano .env  # Add DISCORD_WEBHOOK_URL
+# Edit .env to add DISCORD_WEBHOOK_URL and DISCORD_BOT_TOKEN
 
-# Test
-python test_system.py
+# Run
+python discord_bot.py
 ```
 
 ## Resource Usage
