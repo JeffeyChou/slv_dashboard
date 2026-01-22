@@ -241,7 +241,7 @@ def fetch_slv_holdings(db, force=False):
 
     if cached and not force:
         print(f"✓ SLV holdings (cached {age}h)")
-        return cached, True
+        return cached, True, False  # data, is_cached, etf_updated
 
     try:
         url = "https://www.ishares.com/us/products/239855/ishares-silver-trust-fund"
@@ -265,10 +265,30 @@ def fetch_slv_holdings(db, force=False):
             }
             write_cache(db, "slv_holdings", data)
             print(f"✓ SLV holdings: {holdings:,.0f} oz ({change:+,} oz)")
-            return data, False
+
+            # === Sync to metrics table for chart generation ===
+            oz_to_tonnes = 0.0000311035
+            slv_tonnes = holdings * oz_to_tonnes
+            latest_slv = db.get_latest_metric_value("SLV_Holdings_Tonnes")
+            etf_updated = False
+
+            if latest_slv is None or abs(slv_tonnes - latest_slv) > 0.01:
+                today = datetime.now().strftime("%Y-%m-%d 00:00:00")
+                db.insert_metric(today, "SLV_Holdings_Tonnes", slv_tonnes)
+                if latest_slv:
+                    daily_change = slv_tonnes - latest_slv
+                    db.insert_metric(today, "SLV_Daily_Change_Tonnes", daily_change)
+                    print(
+                        f"  └ 📊 SLV metrics updated: {slv_tonnes:,.2f}t (Δ{daily_change:+,.2f}t)"
+                    )
+                else:
+                    print(f"  └ 📊 SLV metrics initialized: {slv_tonnes:,.2f}t")
+                etf_updated = True
+
+            return data, False, etf_updated
     except Exception:
         pass
-    return cached, True if cached else (None, False)
+    return cached, True, False if cached else (None, False, False)
 
 
 def fetch_gld_holdings(db, force=False):
@@ -277,7 +297,7 @@ def fetch_gld_holdings(db, force=False):
 
     if cached and not force:
         print(f"✓ GLD holdings (cached {age}h)")
-        return cached, True
+        return cached, True, False  # data, is_cached, etf_updated
 
     try:
         url = "https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv"
@@ -306,10 +326,28 @@ def fetch_gld_holdings(db, force=False):
         }
         write_cache(db, "gld_holdings", data)
         print(f"✓ GLD holdings: {tonnes:,.2f} tonnes ({change_tonnes:+,.2f}t)")
-        return data, False
+
+        # === Sync to metrics table for chart generation ===
+        latest_gld = db.get_latest_metric_value("GLD_Holdings_Tonnes")
+        etf_updated = False
+
+        if latest_gld is None or abs(tonnes - latest_gld) > 0.01:
+            today = datetime.now().strftime("%Y-%m-%d 00:00:00")
+            db.insert_metric(today, "GLD_Holdings_Tonnes", tonnes)
+            if latest_gld:
+                daily_change = tonnes - latest_gld
+                db.insert_metric(today, "GLD_Daily_Change_Tonnes", daily_change)
+                print(
+                    f"  └ 📊 GLD metrics updated: {tonnes:,.2f}t (Δ{daily_change:+,.2f}t)"
+                )
+            else:
+                print(f"  └ 📊 GLD metrics initialized: {tonnes:,.2f}t")
+            etf_updated = True
+
+        return data, False, etf_updated
     except Exception as e:
         print(f"⚠ GLD holdings failed: {e}")
-    return cached, True if cached else (None, False)
+    return cached, True, False if cached else (None, False, False)
 
 
 def fetch_comex_inventory(db, force=False):
@@ -490,9 +528,12 @@ def get_market_update_message(force=False):
     # === DAILY DATA (24h cache) ===
     print("\n=== Daily Data (24h cache) ===")
     usdcny, usdcny_cached = fetch_usdcny(db, force)
-    slv_hold, slv_hold_cached = fetch_slv_holdings(db, force)
-    gld_hold, gld_hold_cached = fetch_gld_holdings(db, force)
+    slv_hold, slv_hold_cached, slv_etf_updated = fetch_slv_holdings(db, force)
+    gld_hold, gld_hold_cached, gld_etf_updated = fetch_gld_holdings(db, force)
     comex_inv, comex_inv_cached = fetch_comex_inventory(db, force)
+
+    # Track if any ETF data was updated
+    etf_updated = slv_etf_updated or gld_etf_updated
 
     if comex_inv:
         db.insert("COMEX_INV", raw_data=json.dumps(comex_inv))
@@ -514,29 +555,25 @@ def get_market_update_message(force=False):
     if gold_spot:
         msg += f"• XAU/USD Spot: **${gold_spot:.2f}**/oz\n"
     if comex:
-        msg += f"• COMEX Futures: **${comex['price']:.2f}**/oz"
+        msg += f"• COMEX Futures (SIH26): **${comex['price']:.2f}**/oz\n"
         if comex.get("oi"):
-            msg += f" (OI: {comex['oi']:,}"
-            # Add OI delta if available
+            msg += f"  └ OI: {comex['oi']:,}"
             if comex.get("delta_oi") is not None:
-                delta_oi = comex["delta_oi"]
-                msg += f" {delta_oi:+,}"
-            msg += ")"
-        msg += "\n"
+                msg += f" (ΔOI: {comex['delta_oi']:+,.0f})"
+            msg += "\n"
+            msg += f"  └ Holdings in contract: {(comex['oi'] * 5000):,.0f} oz\n"
     if shfe:
-        msg += f"• SHFE Ag: **${shfe.get('price_usd_oz')}**/oz (¥{shfe.get('price_cny_kg', 0):,.0f}/kg)"
+        msg += f"• SHFE Ag (XOH26): **${shfe.get('price_usd_oz')}**/oz (¥{shfe.get('price_cny_kg', 0):,.0f}/kg)"
         if shfe.get("change_pct") is not None:
             msg += f" {shfe['change_pct']:+.2f}%"
         msg += "\n"
-        if shfe.get("volume") and shfe.get("oi"):
-            msg += f"  └ Vol: {shfe['volume']:,} | OI: {shfe['oi']:,}"
-            # Add SHFE OI delta if available
+        if shfe.get("oi"):
+            msg += f"  └ OI: {shfe['oi']:,}"
             if shfe.get("delta_oi") is not None:
-                delta_oi = shfe["delta_oi"]
-                msg += f" ({delta_oi:+,})"
+                msg += f" (ΔOI: {shfe['delta_oi']:+,.0f})"
             msg += "\n"
-        if comex and shfe.get("price_usd_oz"):
-            premium = shfe["price_usd_oz"] - comex["price"]
+        if xagusd and shfe.get("price_usd_oz"):
+            premium = shfe["price_usd_oz"] - xagusd
             msg += f"  └ Shanghai Premium: **${premium:+.2f}**\n"
     if slv:
         arrow = "🔺" if slv["change_pct"] > 0 else "🔻"
@@ -545,38 +582,51 @@ def get_market_update_message(force=False):
         arrow = "🔺" if gld["change_pct"] > 0 else "🔻"
         msg += f"• GLD ETF: **${gld['price']:.2f}** {arrow}{gld['change_pct']:+.2f}%\n"
 
-    # Daily data
+    # Daily data - Physical Holdings (format: tonnes first, then oz)
     msg += f"\n**📦 Physical Holdings** `[Daily{'*' if not force else ' ✓'}]`\n"
+
+    # Conversion constant
+    oz_to_tonnes = 1 / 32150.7  # 1 oz = 0.0000311035 tonnes
+
     if comex_inv:
-        oz_to_tonnes = 0.0000311035
-        msg += f"• COMEX Registered: **{comex_inv['registered']:,.0f}** oz"
+        # COMEX data is in oz, convert to tonnes for display
+        reg_tonnes = comex_inv["registered"] * oz_to_tonnes
+        elig_tonnes = comex_inv["eligible"] * oz_to_tonnes
+
+        msg += f"• COMEX Registered: **{reg_tonnes:,.2f}** tonnes (**{comex_inv['registered']:,.0f}** oz)"
         if comex_inv.get("delta_registered") is not None:
             delta_oz = comex_inv["delta_registered"]
             delta_t = delta_oz * oz_to_tonnes
-            msg += f" ({delta_oz:+,} oz / {delta_t:+.2f}t)"
+            msg += f" ({delta_t:+.2f}t / {delta_oz:+,} oz)"
         msg += "\n"
         msg += f"          └ Adjustment: {comex_inv['registered_adjustment']:,.0f} oz\n"
 
-        msg += f"• COMEX Eligible: **{comex_inv['eligible']:,.0f}** oz"
+        msg += f"• COMEX Eligible: **{elig_tonnes:,.2f}** tonnes (**{comex_inv['eligible']:,.0f}** oz)"
         if comex_inv.get("delta_eligible") is not None:
             delta_oz = comex_inv["delta_eligible"]
             delta_t = delta_oz * oz_to_tonnes
-            msg += f" ({delta_oz:+,} oz / {delta_t:+.2f}t)"
+            msg += f" ({delta_t:+.2f}t / {delta_oz:+,} oz)"
         msg += "\n"
         msg += f"          └ Adjustment: {comex_inv['eligible_adjustment']:,.0f} oz\n"
         msg += f"  └ Reg/Total: {comex_inv['reg_ratio']}%\n"
+
     if slv_hold:
-        oz_to_tonnes = 0.0000311035
-        msg += f"• SLV Trust: **{slv_hold['holdings_oz']:,.0f}** oz"
+        # SLV holdings in oz, convert to tonnes
+        slv_tonnes = slv_hold["holdings_oz"] * oz_to_tonnes
+        msg += f"• SLV Trust: **{slv_tonnes:,.2f}** tonnes (**{slv_hold['holdings_oz']:,.0f}** oz)"
         if slv_hold.get("change") is not None:
             delta_oz = slv_hold["change"]
             delta_t = delta_oz * oz_to_tonnes
-            msg += f" ({delta_oz:+,} oz / {delta_t:+.2f}t)"
+            msg += f" ({delta_t:+.2f}t / {delta_oz:+,} oz)"
         msg += "\n"
+
     if gld_hold:
+        # GLD already has both tonnes and oz
         msg += f"• GLD Trust: **{gld_hold['holdings_tonnes']:,.2f}** tonnes (**{gld_hold['holdings_oz']:,.0f}** oz)"
         if gld_hold.get("change_tonnes") is not None:
-            msg += f" ({gld_hold['change_tonnes']:+,.2f}t)"
+            # Calculate oz change from tonnes change
+            change_oz = gld_hold["change_tonnes"] * 32150.7
+            msg += f" ({gld_hold['change_tonnes']:+.2f}t / {change_oz:+,.0f} oz)"
         msg += "\n"
 
     msg += f"\n**💱 FX Rate** `[Daily{'*' if not force else ' ✓'}]`\n"
@@ -605,7 +655,7 @@ def get_market_update_message(force=False):
         if oi:
             paper_oz = oi * 5000
             ratio = round(paper_oz / comex_inv["registered"], 2)
-            msg += f"\n**📈 Key Metrics**\n"
+            msg += "\n**📈 Key Metrics**\n"
             msg += f"• Paper/Physical: **{ratio}x**\n"
             if xagusd and comex:
                 basis = round(comex["price"] - xagusd, 3)
@@ -614,7 +664,7 @@ def get_market_update_message(force=False):
     msg += "\n─────────────────────────────\n"
     msg += "`*` cached (24h) │ `Paper/Physical` = (OI×5000oz) / Registered │ `Basis` = Futures - Spot"
 
-    return msg
+    return msg, etf_updated
 
 
 def main(force=False):
@@ -624,7 +674,9 @@ def main(force=False):
     if force:
         print("Force refresh enabled")
 
-    msg = get_market_update_message(force)
+    msg, etf_updated = get_market_update_message(force)
+    if etf_updated:
+        print("📊 ETF data was updated in the database")
     send_discord(msg)
 
 

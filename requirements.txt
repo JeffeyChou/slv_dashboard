@@ -9,3 +9,5 @@ openpyxl
 matplotlib
 python-dotenv
 pytz
+discord
+xlrd

@@ -216,6 +216,16 @@ class DBManager:
 
             return 0.0
 
+    def get_latest_metric_value(self, metric_name):
+        """Get the most recent value for a metric."""
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "SELECT value FROM metrics WHERE metric_name = ? ORDER BY timestamp DESC LIMIT 1",
+                (metric_name,),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+
     # ============ Cache Methods (replaces JSON files) ============
 
     def get_cache(self, key, ttl_hours=24):
