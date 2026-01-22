@@ -12,9 +12,10 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 import concurrent.futures
+from datetime import datetime
 
 # Import tasks
-from task_hourly import main as task_hourly_main
+from task_hourly import get_market_update_message
 from task_daily_report import main as task_daily_main
 
 # Load environment variables
@@ -34,15 +35,33 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Executor for running synchronous tasks
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
+# Store the channel ID for scheduled updates
+target_channel_id = None
+
 
 @tasks.loop(minutes=60)
 async def scheduled_hourly_task():
+    if not target_channel_id:
+        print(
+            "⚠️ Scheduled task skipped: No target channel set. Run /autorun_on in a channel first."
+        )
+        return
+
     print("🔄 Running scheduled hourly update...")
     try:
         loop = asyncio.get_running_loop()
         # Run with force=False for regular updates
-        await loop.run_in_executor(executor, lambda: task_hourly_main(force=False))
-        print("✅ Scheduled update completed")
+        msg = await loop.run_in_executor(
+            executor, lambda: get_market_update_message(force=False)
+        )
+
+        channel = bot.get_channel(target_channel_id)
+        if channel:
+            await channel.send(msg)
+            print("✅ Scheduled update sent")
+        else:
+            print(f"❌ Could not find channel {target_channel_id}")
+
     except Exception as e:
         print(f"❌ Scheduled update failed: {e}")
 
@@ -57,17 +76,24 @@ async def on_ready():
         print(f"Failed to sync commands: {e}")
 
 
-@bot.tree.command(name="autorun_on", description="Enable automatic hourly updates")
+@bot.tree.command(
+    name="autorun_on", description="Enable automatic hourly updates in this channel"
+)
 async def autorun_on(interaction: discord.Interaction):
     """Enable automatic hourly updates"""
+    global target_channel_id
+    target_channel_id = interaction.channel_id
+
     if not scheduled_hourly_task.is_running():
         scheduled_hourly_task.start()
         await interaction.response.send_message(
-            "✅ Automatic updates enabled (runs every 60 mins).", ephemeral=True
+            f"✅ Automatic updates enabled in this channel (runs every 60 mins).",
+            ephemeral=True,
         )
     else:
         await interaction.response.send_message(
-            "ℹ️ Automatic updates are already running.", ephemeral=True
+            f"✅ Target channel updated to this channel. Automatic updates are running.",
+            ephemeral=True,
         )
 
 
@@ -97,8 +123,12 @@ async def update_data(interaction: discord.Interaction):
     try:
         # Run synchronous task in thread pool
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(executor, lambda: task_hourly_main(force=True))
+        msg = await loop.run_in_executor(
+            executor, lambda: get_market_update_message(force=True)
+        )
 
+        # Send to the channel where command was invoked
+        await interaction.channel.send(msg)
         await interaction.followup.send("✅ Data updated and sent!", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(
@@ -116,9 +146,23 @@ async def update_plot(interaction: discord.Interaction):
     try:
         # Run synchronous task in thread pool
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(executor, task_daily_main)
+        chart_path = await loop.run_in_executor(executor, task_daily_main)
 
-        await interaction.followup.send("✅ Chart generated and sent!", ephemeral=True)
+        # Send to the channel where command was invoked
+        if chart_path and os.path.exists(chart_path):
+            file = discord.File(chart_path, filename="etf_holdings_report.png")
+            await interaction.channel.send(
+                content=f"**📊 Daily Silver Report** - {datetime.utcnow().strftime('%Y-%m-%d')}",
+                file=file,
+            )
+            await interaction.followup.send(
+                "✅ Chart generated and sent!", ephemeral=True
+            )
+        else:
+            await interaction.followup.send(
+                "❌ Chart generation failed (no file returned).", ephemeral=True
+            )
+
     except Exception as e:
         await interaction.followup.send(
             f"❌ Error generating chart: {str(e)}", ephemeral=True

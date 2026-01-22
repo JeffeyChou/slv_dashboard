@@ -345,13 +345,8 @@ def send_discord(msg):
         print(f"⚠ Error sending Discord message: {e}")
 
 
-def main(force=False):
-    if "--force" in sys.argv:
-        force = True
-
-    if force:
-        print("Force refresh enabled")
-
+def get_market_update_message(force=False):
+    """Generate the market update message string"""
     db = DBManager()
 
     # === HOURLY DATA ===
@@ -556,6 +551,17 @@ def main(force=False):
     msg += "\n─────────────────────────────\n"
     msg += "`*` cached (24h) │ `Paper/Physical` = (OI×5000oz) / Registered │ `Basis` = Futures - Spot"
 
+    return msg
+
+
+def main(force=False):
+    if "--force" in sys.argv:
+        force = True
+
+    if force:
+        print("Force refresh enabled")
+
+    msg = get_market_update_message(force)
     send_discord(msg)
 
 

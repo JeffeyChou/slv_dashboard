@@ -6,7 +6,6 @@ Real-time silver market intelligence bot with OI tracking, delivery data, and Di
 
 ```bash
 # Set Discord credentials
-export DISCORD_WEBHOOK_URL="your_webhook_url_here"
 export DISCORD_BOT_TOKEN="your_bot_token_here"
 
 # Run the bot
@@ -18,7 +17,7 @@ python discord_bot.py
 - **Slash Commands**:
     - `/update_data`: Force refresh all market data and send report immediately
     - `/update_plot`: Generate and send the latest ETF holdings chart
-    - `/autorun_on`: Enable automatic hourly updates (runs every 60 mins)
+    - `/autorun_on`: Enable automatic hourly updates (runs every 60 mins) in the current channel
     - `/autorun_off`: Disable automatic updates
 - **Real-time Prices**: XAG/USD, COMEX Futures, SHFE Silver, SLV/GLD ETF
 - **OI Change Tracking**: COMEX and SHFE Open Interest deltas
@@ -76,38 +75,30 @@ Metrics:
 ```
 slv_dashboard/
 ├── discord_bot.py       # Main Bot with Slash Commands
-├── task_hourly.py       # Hourly data fetch + Discord posting
-├── task_daily_report.py # Daily chart generation
+├── task_hourly.py       # Hourly data fetch logic
+├── task_daily_report.py # Daily chart generation logic
 ├── data_fetcher.py      # SilverDataFetcher class
 ├── db_manager.py        # Unified database (records, metrics, cache)
 ├── cme_pdf_parser.py    # CME delivery PDF parser
 ├── test_system.py       # System test script
 ├── requirements.txt     # Dependencies
 ├── .env                 # Environment variables
-├── run_hourly.sh        # Cron wrapper (hourly)
-├── run_daily.sh         # Cron wrapper (daily)
 ├── market_data.db       # Unified SQLite database
-└── cache/               # Discord message ID file
+└── cache/               # Cache directory
 ```
 
 ## Automation
 
-You can choose between two automation methods:
-
-1.  **Internal Scheduler (Recommended)**:
+1.  **Run the Bot**:
     *   Run `python discord_bot.py`
-    *   Type `/autorun_on` in Discord to enable hourly updates.
+    *   Invite the bot to your server.
+    *   Type `/autorun_on` in the channel where you want updates.
     *   The bot will run continuously and update data every 60 minutes.
-
-2.  **External Cron**:
-    *   Use `crontab` to schedule `run_hourly.sh` and `run_daily.sh`.
-    *   Note: This requires the bot script to be running separately if you want slash commands.
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DISCORD_WEBHOOK_URL` | Yes | Discord webhook URL |
 | `DISCORD_BOT_TOKEN` | Yes | Discord Bot Token (for slash commands) |
 | `METALS_DEV_KEY` | No | metals.dev API key (100 calls/month) |
 
@@ -120,7 +111,7 @@ pip install -r requirements.txt
 
 # Configure
 cp .env.template .env
-# Edit .env to add DISCORD_WEBHOOK_URL and DISCORD_BOT_TOKEN
+# Edit .env to add DISCORD_BOT_TOKEN
 
 # Run
 python discord_bot.py

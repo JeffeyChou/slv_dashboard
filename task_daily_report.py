@@ -398,18 +398,11 @@ def main():
     etf_chart = generate_etf_holdings_charts()
     print(f"✓ ETF holdings chart: {etf_chart}")
 
-    # Generate price chart
-    # if daily_data:
-    #     price_chart = generate_price_chart(daily_data)
-    #     print(f"✓ Price chart: {price_chart}")
-
-    #     # Send to Discord
-    #     send_discord_images(etf_chart, price_chart)
-    # else:
-    #     send_discord_images(etf_chart)
+    # Send to Discord if running standalone
     send_discord_images(etf_chart)
 
     print("✅ Daily report charts generated")
+    return etf_chart
 
 
 if __name__ == "__main__":
