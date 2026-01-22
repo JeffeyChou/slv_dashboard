@@ -1,15 +1,11 @@
+# Core dependencies
 yfinance
 pandas
 requests
 beautifulsoup4
 lxml
-openpyxl
-xlrd
-requests-html
-pyppeteer
-PyPDF2
 pdfplumber
-tabula-py
+openpyxl
+matplotlib
+python-dotenv
 pytz
-selenium
-webdriver-manager

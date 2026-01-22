@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Silver Market Discord Bot
-Fetches market data and forwards to Discord webhook
+Local test script for Discord Bot message.
+Forces fresh data fetch from all sources and prints the message that would be sent to Discord.
+
+Usage: python test_discord_message.py
 """
 
 import os
@@ -14,28 +16,14 @@ from data_fetcher import SilverDataFetcher
 import pandas as pd
 from io import BytesIO
 import pytz
-import sys
-
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-CACHE_DIR = "cache"
-MSG_ID_FILE = os.path.join(CACHE_DIR, "discord_msg_id.txt")
+import re
 
 
 def get_est_time():
     return datetime.now(pytz.timezone("America/New_York"))
 
 
-def read_cache(db, name, ttl_hours=24):
-    """Read cache from database if valid within TTL"""
-    return db.get_cache(name, ttl_hours)
-
-
-def write_cache(db, name, data):
-    """Write cache to database"""
-    db.set_cache(name, data)
-
-
-# ============ HOURLY DATA (Real-time) ============
+# ============ FORCE FETCH ALL DATA ============
 
 
 def fetch_xagusd():
@@ -43,17 +31,17 @@ def fetch_xagusd():
     try:
         t = yf.Ticker("SI=F")
         return t.info.get("regularMarketPrice")
-    except:
+    except Exception as e:
+        print(f"⚠ XAG/USD failed: {e}")
         return None
 
 
 def fetch_shanghai_td():
-    """Shanghai Ag T+D"""
+    """Shanghai Ag T+D from barchart"""
     try:
         url = "https://www.barchart.com/futures/quotes/XOH26/overview"
         headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
         resp = requests.get(url, headers=headers, timeout=15)
-        import re
 
         data = {}
         cny_rate = yf.Ticker("CNY=X").history(period="1d")["Close"].iloc[-1]
@@ -94,12 +82,13 @@ def fetch_comex_futures():
             "oi": info.get("openInterest", 0),
             "prev_close": info.get("previousClose"),
         }
-    except:
+    except Exception as e:
+        print(f"⚠ COMEX failed: {e}")
         return None
 
 
 def fetch_slv_price():
-    """SLV ETF price only (hourly)"""
+    """SLV ETF price"""
     try:
         slv = yf.Ticker("SLV")
         info = slv.info
@@ -115,12 +104,13 @@ def fetch_slv_price():
             ),
             "volume": info.get("volume", 0),
         }
-    except:
+    except Exception as e:
+        print(f"⚠ SLV failed: {e}")
         return None
 
 
 def fetch_gld_price():
-    """GLD ETF price only (hourly)"""
+    """GLD ETF price"""
     try:
         gld = yf.Ticker("GLD")
         info = gld.info
@@ -136,86 +126,59 @@ def fetch_gld_price():
             ),
             "volume": info.get("volume", 0),
         }
-    except:
+    except Exception as e:
+        print(f"⚠ GLD failed: {e}")
         return None
 
 
 def fetch_gold_spot():
-    """Gold spot price (hourly)"""
+    """Gold spot price"""
     try:
         gc = yf.Ticker("GC=F")
         hist = gc.history(period="1d")
         if not hist.empty:
             return round(hist["Close"].iloc[-1], 2)
-    except:
-        pass
+    except Exception as e:
+        print(f"⚠ Gold spot failed: {e}")
     return None
 
 
-# ============ DAILY DATA (24h cache) ============
-
-
-def fetch_usdcny(db, force=False):
-    """USD/CNY rate - daily"""
-    cached, age = read_cache(db, "usdcny", 24)
-    if cached and not force:
-        print(f"✓ USD/CNY (cached {age}h)")
-        return cached, True
-
+def fetch_usdcny():
+    """USD/CNY rate - FORCE FRESH"""
     try:
         rate = yf.Ticker("CNY=X").history(period="1d")["Close"].iloc[-1]
-        data = {"rate": round(rate, 4), "ts": datetime.now().isoformat()}
-        write_cache(db, "usdcny", data)
-        print(f"✓ USD/CNY: {rate:.4f} (fresh)")
-        return data, False
-    except Exception:
-        return cached, True if cached else (None, False)
+        return {"rate": round(rate, 4), "ts": datetime.now().isoformat()}
+    except Exception as e:
+        print(f"⚠ USD/CNY failed: {e}")
+        return None
 
 
-def fetch_slv_holdings(db, force=False):
-    """SLV ETF holdings - daily"""
-    cached, age = read_cache(db, "slv_holdings", 24)
-
-    if cached and not force:
-        print(f"✓ SLV holdings (cached {age}h)")
-        return cached, True
-
+def fetch_slv_holdings(db):
+    """SLV ETF holdings - FORCE FRESH"""
     try:
         url = "https://www.ishares.com/us/products/239855/ishares-silver-trust-fund"
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        import re
 
         match = re.search(r"(\d{3},\d{3},\d{3}\.\d+)", resp.text)
         if match:
             holdings = float(match.group(1).replace(",", ""))
-
-            # Get last different value from database
             prev_holdings = db.get_last_different_value("SLV_HOLDINGS", holdings)
             if not prev_holdings:
                 prev_holdings = db.get_last_different_value("SLV", holdings)
 
             change = int(holdings - prev_holdings) if prev_holdings else 0
-            data = {
+            return {
                 "holdings_oz": holdings,
                 "change": change,
                 "ts": datetime.now().isoformat(),
             }
-            write_cache(db, "slv_holdings", data)
-            print(f"✓ SLV holdings: {holdings:,.0f} oz ({change:+,} oz)")
-            return data, False
-    except Exception:
-        pass
-    return cached, True if cached else (None, False)
+    except Exception as e:
+        print(f"⚠ SLV holdings failed: {e}")
+    return None
 
 
-def fetch_gld_holdings(db, force=False):
-    """GLD ETF holdings - daily"""
-    cached, age = read_cache(db, "gld_holdings", 24)
-
-    if cached and not force:
-        print(f"✓ GLD holdings (cached {age}h)")
-        return cached, True
-
+def fetch_gld_holdings(db):
+    """GLD ETF holdings - FORCE FRESH"""
     try:
         url = "https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv"
         resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
@@ -229,34 +192,24 @@ def fetch_gld_holdings(db, force=False):
             last[" Total Net Asset Value Ounces in the Trust as at 4.15 p.m. NYT"]
         )
 
-        # Get last different value from database
         prev_tonnes = db.get_last_different_value(
             "GLD_HOLDINGS", tonnes, key="holdings_tonnes"
         )
-
         change_tonnes = tonnes - prev_tonnes if prev_tonnes else 0
-        data = {
+
+        return {
             "holdings_tonnes": tonnes,
             "holdings_oz": ounces,
             "change_tonnes": change_tonnes,
             "ts": datetime.now().isoformat(),
         }
-        write_cache(db, "gld_holdings", data)
-        print(f"✓ GLD holdings: {tonnes:,.2f} tonnes ({change_tonnes:+,.2f}t)")
-        return data, False
     except Exception as e:
         print(f"⚠ GLD holdings failed: {e}")
-    return cached, True if cached else (None, False)
+    return None
 
 
-def fetch_comex_inventory(db, force=False):
-    """COMEX physical inventory - daily"""
-    cached, age = read_cache(db, "comex_inv", 24)
-
-    if cached and not force:
-        print(f"✓ COMEX inventory (cached {age}h)")
-        return cached, True
-
+def fetch_comex_inventory():
+    """COMEX physical inventory - FORCE FRESH"""
     try:
         url = "https://www.cmegroup.com/delivery_reports/Silver_stocks.xls"
         resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
@@ -268,16 +221,16 @@ def fetch_comex_inventory(db, force=False):
         for _, row in df.iterrows():
             label = str(row.iloc[0]).strip()
             if label == "TOTAL REGISTERED":
-                prev_total = float(row.iloc[2])  # PREV TOTAL
-                registered = float(row.iloc[7])  # TOTAL TODAY
+                prev_total = float(row.iloc[2])
+                registered = float(row.iloc[7])
                 delta_reg = int(registered - prev_total)
             elif label == "TOTAL ELIGIBLE":
-                prev_total = float(row.iloc[2])  # PREV TOTAL
-                eligible = float(row.iloc[7])  # TOTAL TODAY
+                prev_total = float(row.iloc[2])
+                eligible = float(row.iloc[7])
                 delta_elig = int(eligible - prev_total)
 
         if registered and eligible:
-            data = {
+            return {
                 "registered": registered,
                 "eligible": eligible,
                 "total": registered + eligible,
@@ -286,164 +239,31 @@ def fetch_comex_inventory(db, force=False):
                 "delta_eligible": delta_elig if delta_elig is not None else 0,
                 "ts": datetime.now().isoformat(),
             }
-            write_cache(db, "comex_inv", data)
-            print(f"✓ COMEX inventory: {registered:,.0f} oz ({delta_reg:+,} oz)")
-            return data, False
     except Exception as e:
         print(f"⚠ COMEX inventory failed: {e}")
-
-    return cached, True if cached else (None, False)
-
-
-def send_discord(msg):
-    if not WEBHOOK_URL:
-        print("⚠ No Discord webhook URL configured")
-        return
-
-    os.makedirs(CACHE_DIR, exist_ok=True)
-
-    # Try to edit existing message
-    message_sent = False
-    if os.path.exists(MSG_ID_FILE):
-        with open(MSG_ID_FILE) as f:
-            msg_id = f.read().strip()
-        if msg_id:
-            edit_url = f"{WEBHOOK_URL}/messages/{msg_id}"
-            try:
-                resp = requests.patch(edit_url, json={"content": msg}, timeout=10)
-                if resp.status_code == 200:
-                    print(f"✓ Discord message updated (ID: {msg_id})")
-                    return
-                else:
-                    print(
-                        f"⚠ Failed to edit message (status {resp.status_code}), sending new one"
-                    )
-            except Exception as e:
-                print(f"⚠ Error editing message: {e}, sending new one")
-
-    # Send new message and save ID
-    try:
-        resp = requests.post(
-            f"{WEBHOOK_URL}?wait=true", json={"content": msg}, timeout=10
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            msg_id = data.get("id", "")
-            if msg_id:
-                with open(MSG_ID_FILE, "w") as f:
-                    f.write(msg_id)
-                print(f"✓ New Discord message sent (ID: {msg_id})")
-            else:
-                print("✓ Discord message sent (no ID returned)")
-        else:
-            print(f"⚠ Failed to send Discord message (status {resp.status_code})")
-    except Exception as e:
-        print(f"⚠ Error sending Discord message: {e}")
+    return None
 
 
-def main():
-    force = "--force" in sys.argv
-    if force:
-        print("Force refresh enabled")
-
-    db = DBManager()
-
-    # === HOURLY DATA ===
-    print("\n=== Hourly Data (Real-time) ===")
-    xagusd = fetch_xagusd()
-    shfe = fetch_shanghai_td()
-    comex = fetch_comex_futures()
-    slv = fetch_slv_price()
-    gld = fetch_gld_price()
-    gold_spot = fetch_gold_spot()
-
-    # === GET ADDITIONAL DATA FROM MAIN FETCHER ===
-    print("\n=== Fetching OI deltas and delivery data ===")
-    try:
-        fetcher = SilverDataFetcher()
-
-        # Get futures data with OI delta
-        futures_data = fetcher.get_futures_data()
-        if futures_data and not futures_data.get("error"):
-            if comex:
-                comex["delta_oi"] = futures_data.get("delta_oi")
-                print(f"✓ COMEX OI Delta: {comex.get('delta_oi')}")
-
-        # Get SHFE data with OI delta - use the barchart data, not JSON file
-        shfe_data = fetcher.get_shfe_data()
-        if shfe_data and shfe_data.get("status") == "Success":
-            if shfe:
-                # Use the live barchart data but get delta from database
-                shfe["delta_oi"] = shfe_data.get("delta_oi")
-                print(f"✓ SHFE OI Delta: {shfe.get('delta_oi')}")
-            else:
-                # If no SHFE data from hourly fetch, use the main fetcher data
-                shfe = {
-                    "price_usd_oz": round(
-                        (shfe_data.get("price", 0) / 6.96) / 32.1507, 2
-                    )
-                    if shfe_data.get("price")
-                    else None,
-                    "price_cny_kg": shfe_data.get("price"),
-                    "volume": shfe_data.get("volume"),
-                    "oi": shfe_data.get("oi"),
-                    "delta_oi": shfe_data.get("delta_oi"),
-                    "change_pct": 0,  # Default since we don't have this from main fetcher
-                }
-        else:
-            # Fallback: if main fetcher fails, keep the barchart data but no delta
-            if shfe:
-                shfe["delta_oi"] = None
-                print("⚠ SHFE OI Delta: Not available (main fetcher failed)")
-
-        # Get 3-day delivery data
-        delivery_3days = fetcher.pdf_parser.parse_last_3_days_silver()
-        print(f"✓ 3-day delivery data: {delivery_3days.get('found', False)}")
-
-    except Exception as e:
-        print(f"⚠ Error fetching additional data: {e}")
-        delivery_3days = {"error": str(e)}
-
-    if xagusd:
-        db.insert("XAGUSD", price=xagusd)
-        print(f"✓ XAG/USD: ${xagusd}")
-    if comex:
-        db.insert("COMEX", price=comex["price"], raw_data=json.dumps(comex))
-        print(f"✓ COMEX: ${comex['price']}")
-    if shfe:
-        db.insert("SHFE", raw_data=json.dumps(shfe))
-        print(f"✓ SHFE: ${shfe.get('price_usd_oz')}/oz")
-    if slv:
-        db.insert("SLV", price=slv["price"], raw_data=json.dumps(slv))
-        print(f"✓ SLV: ${slv['price']}")
-    if gld:
-        db.insert("GLD", price=gld["price"], raw_data=json.dumps(gld))
-        print(f"✓ GLD: ${gld['price']}")
-    if gold_spot:
-        db.insert("GOLD_SPOT", price=gold_spot)
-        print(f"✓ Gold Spot: ${gold_spot}")
-
-    # === DAILY DATA (24h cache) ===
-    print("\n=== Daily Data (24h cache) ===")
-    usdcny, usdcny_cached = fetch_usdcny(db, force)
-    slv_hold, slv_hold_cached = fetch_slv_holdings(db, force)
-    gld_hold, gld_hold_cached = fetch_gld_holdings(db, force)
-    comex_inv, comex_inv_cached = fetch_comex_inventory(db, force)
-
-    if comex_inv:
-        db.insert("COMEX_INV", raw_data=json.dumps(comex_inv))
-    if slv_hold:
-        db.insert("SLV_HOLDINGS", raw_data=json.dumps(slv_hold))
-    if gld_hold:
-        db.insert("GLD_HOLDINGS", raw_data=json.dumps(gld_hold))
-
-    # === DISCORD MESSAGE ===
+def build_discord_message(
+    xagusd,
+    gold_spot,
+    comex,
+    shfe,
+    slv,
+    gld,
+    usdcny,
+    slv_hold,
+    gld_hold,
+    comex_inv,
+    delivery_3days,
+):
+    """Build the Discord message without sending it"""
     est = get_est_time()
     ts = est.strftime("%Y-%m-%d %I:%M %p EST")
 
     msg = f"**📊 Silver Market Update** - {ts}\n\n"
 
-    # Spot & Futures (30min)
+    # Spot & Futures
     msg += "**💹 Real-time Prices** `[30min]`\n"
     if xagusd:
         msg += f"• XAG/USD Spot: **${xagusd:.2f}**/oz\n"
@@ -453,10 +273,8 @@ def main():
         msg += f"• COMEX Futures: **${comex['price']:.2f}**/oz"
         if comex.get("oi"):
             msg += f" (OI: {comex['oi']:,}"
-            # Add OI delta if available
             if comex.get("delta_oi") is not None:
-                delta_oi = comex["delta_oi"]
-                msg += f" {delta_oi:+,}"
+                msg += f" {comex['delta_oi']:+,}"
             msg += ")"
         msg += "\n"
     if shfe:
@@ -466,10 +284,8 @@ def main():
         msg += "\n"
         if shfe.get("volume") and shfe.get("oi"):
             msg += f"  └ Vol: {shfe['volume']:,} | OI: {shfe['oi']:,}"
-            # Add SHFE OI delta if available
             if shfe.get("delta_oi") is not None:
-                delta_oi = shfe["delta_oi"]
-                msg += f" ({delta_oi:+,})"
+                msg += f" ({shfe['delta_oi']:+,})"
             msg += "\n"
         if comex and shfe.get("price_usd_oz"):
             premium = shfe["price_usd_oz"] - comex["price"]
@@ -482,7 +298,7 @@ def main():
         msg += f"• GLD ETF: **${gld['price']:.2f}** {arrow}{gld['change_pct']:+.2f}%\n"
 
     # Daily data
-    msg += f"\n**📦 Physical Holdings** `[Daily{'*' if not force else ' ✓'}]`\n"
+    msg += "\n**📦 Physical Holdings** `[Daily ✓]`\n"
     if comex_inv:
         oz_to_tonnes = 0.0000311035
         msg += f"• COMEX Registered: **{comex_inv['registered']:,.0f}** oz"
@@ -513,24 +329,22 @@ def main():
             msg += f" ({gld_hold['change_tonnes']:+,.2f}t)"
         msg += "\n"
 
-    msg += f"\n**💱 FX Rate** `[Daily{'*' if not force else ' ✓'}]`\n"
+    msg += "\n**💱 FX Rate** `[Daily ✓]`\n"
     if usdcny:
         msg += f"• USD/CNY: **{usdcny['rate']}**\n"
 
-    # Add 3-day delivery data
-    if "delivery_3days" in locals():
-        delivery_data = delivery_3days
-        msg += f"\n**📦 COMEX Silver Deliveries (Last 3 Days)** `[Daily{'*' if not force else ' ✓'}]`\n"
-
-        if delivery_data.get("error"):
-            msg += f"• Error: {delivery_data['error']}\n"
-        elif not delivery_data.get("found"):
+    # Delivery data
+    if delivery_3days:
+        msg += "\n**📦 COMEX Silver Deliveries (Last 3 Days)** `[Daily ✓]`\n"
+        if delivery_3days.get("error"):
+            msg += f"• Error: {delivery_3days['error']}\n"
+        elif not delivery_3days.get("found"):
             msg += "• No delivery data available\n"
-        elif not delivery_data.get("data") or len(delivery_data["data"]) == 0:
-            note = delivery_data.get("note", "No delivery data available")
+        elif not delivery_3days.get("data") or len(delivery_3days["data"]) == 0:
+            note = delivery_3days.get("note", "No delivery data available")
             msg += f"• {note}\n"
         else:
-            for day in delivery_data["data"]:
+            for day in delivery_3days["data"]:
                 msg += f"• {day['intent_date']}: **{day['daily_total']:,}** daily, **{day['total_cumulative']:,}** cumulative\n"
 
     # Metrics
@@ -539,7 +353,7 @@ def main():
         if oi:
             paper_oz = oi * 5000
             ratio = round(paper_oz / comex_inv["registered"], 2)
-            msg += f"\n**📈 Key Metrics**\n"
+            msg += "\n**📈 Key Metrics**\n"
             msg += f"• Paper/Physical: **{ratio}x**\n"
             if xagusd and comex:
                 basis = round(comex["price"] - xagusd, 3)
@@ -548,7 +362,107 @@ def main():
     msg += "\n─────────────────────────────\n"
     msg += "`*` cached (24h) │ `Paper/Physical` = (OI×5000oz) / Registered │ `Basis` = Futures - Spot"
 
-    send_discord(msg)
+    return msg
+
+
+def main():
+    print("=" * 60)
+    print("LOCAL TEST - Discord Message Preview")
+    print("Force fetching ALL data from sources...")
+    print("=" * 60)
+
+    db = DBManager()
+
+    # === HOURLY DATA (30min) ===
+    print("\n=== Fetching 30min Data ===")
+    xagusd = fetch_xagusd()
+    print(f"✓ XAG/USD: ${xagusd}" if xagusd else "✗ XAG/USD failed")
+
+    shfe = fetch_shanghai_td()
+    print(f"✓ SHFE: ${shfe.get('price_usd_oz')}/oz" if shfe else "✗ SHFE failed")
+
+    comex = fetch_comex_futures()
+    print(f"✓ COMEX: ${comex['price']}" if comex else "✗ COMEX failed")
+
+    slv = fetch_slv_price()
+    print(f"✓ SLV: ${slv['price']}" if slv else "✗ SLV failed")
+
+    gld = fetch_gld_price()
+    print(f"✓ GLD: ${gld['price']}" if gld else "✗ GLD failed")
+
+    gold_spot = fetch_gold_spot()
+    print(f"✓ Gold Spot: ${gold_spot}" if gold_spot else "✗ Gold Spot failed")
+
+    # Get OI deltas from fetcher
+    try:
+        fetcher = SilverDataFetcher(db_manager=db)
+
+        futures_data = fetcher.get_futures_data()
+        if futures_data and not futures_data.get("error") and comex:
+            comex["delta_oi"] = futures_data.get("delta_oi")
+            print(f"✓ COMEX OI Delta: {comex.get('delta_oi')}")
+
+        shfe_data = fetcher.get_shfe_data()
+        if shfe_data and shfe_data.get("status") == "Success" and shfe:
+            shfe["delta_oi"] = shfe_data.get("delta_oi")
+            print(f"✓ SHFE OI Delta: {shfe.get('delta_oi')}")
+
+        delivery_3days = fetcher.pdf_parser.parse_last_3_days_silver()
+        print(f"✓ 3-day delivery: {delivery_3days.get('found', False)}")
+    except Exception as e:
+        print(f"⚠ Additional fetcher error: {e}")
+        delivery_3days = {"error": str(e)}
+
+    # === DAILY DATA (Force Fresh) ===
+    print("\n=== Fetching Daily Data (Force Fresh) ===")
+    usdcny = fetch_usdcny()
+    print(f"✓ USD/CNY: {usdcny['rate']}" if usdcny else "✗ USD/CNY failed")
+
+    slv_hold = fetch_slv_holdings(db)
+    print(
+        f"✓ SLV Holdings: {slv_hold['holdings_oz']:,.0f} oz"
+        if slv_hold
+        else "✗ SLV Holdings failed"
+    )
+
+    gld_hold = fetch_gld_holdings(db)
+    print(
+        f"✓ GLD Holdings: {gld_hold['holdings_tonnes']:,.2f} tonnes"
+        if gld_hold
+        else "✗ GLD Holdings failed"
+    )
+
+    comex_inv = fetch_comex_inventory()
+    print(
+        f"✓ COMEX Inventory: {comex_inv['registered']:,.0f} oz"
+        if comex_inv
+        else "✗ COMEX Inventory failed"
+    )
+
+    # === BUILD MESSAGE ===
+    print("\n" + "=" * 60)
+    print("DISCORD MESSAGE PREVIEW:")
+    print("=" * 60 + "\n")
+
+    msg = build_discord_message(
+        xagusd,
+        gold_spot,
+        comex,
+        shfe,
+        slv,
+        gld,
+        usdcny,
+        slv_hold,
+        gld_hold,
+        comex_inv,
+        delivery_3days,
+    )
+
+    print(msg)
+
+    print("\n" + "=" * 60)
+    print(f"Message length: {len(msg)} characters")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

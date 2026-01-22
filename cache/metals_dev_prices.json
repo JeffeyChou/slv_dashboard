@@ -1,9 +1,0 @@
-{
-  "silver": 93.56,
-  "gold": 4689.8,
-  "lbma_silver": null,
-  "gold_silver_ratio": 50.13,
-  "timestamp": "2026-01-20 04:35:38",
-  "source": "Futures Proxy (no API key)",
-  "note": "Set METALS_DEV_KEY env var for metals.dev API"
-}

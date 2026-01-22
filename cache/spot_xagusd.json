@@ -1,6 +1,0 @@
-{
-  "price": 70.84,
-  "timestamp": "2025-12-31 14:25:32",
-  "source": "Futures Proxy (no API key)",
-  "note": "Set METALS_API_KEY env var for true spot"
-}
