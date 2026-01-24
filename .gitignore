@@ -105,5 +105,9 @@ temp/
 *.sqlite
 *.sqlite3
 
+# Allow cache/silver_market.db for persistence
+!cache/
+!cache/silver_market.db
+
 *.png
 *.csv

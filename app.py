@@ -109,6 +109,20 @@ def create_app():
 
         return jsonify(result.to_dict())
 
+    @app.route("/download/db")
+    def download_db():
+        """Download SQLite database for backup."""
+        from flask import send_file
+        token = request.args.get("token")
+        expected = os.getenv("API_SECRET_TOKEN")
+        if expected and token != expected:
+            return jsonify({"error": "Unauthorized"}), 401
+
+        db_path = os.path.join(os.path.dirname(__file__), "cache", "silver_market.db")
+        if os.path.exists(db_path):
+            return send_file(db_path, as_attachment=True)
+        return jsonify({"error": "Database not found"}), 404
+
     return app
 
 
