@@ -1,0 +1,32 @@
+# GitHub Actions - ETF Monitor for Silver Market Bot
+# Runs every 5 minutes during ETF window (Mon-Fri 17:00-20:00 EST)
+
+name: ETF Monitor
+
+on:
+  schedule:
+    # ETF Monitor: Mon-Fri 17:00-20:00 EST = UTC 22:00-01:00
+    - cron: '*/5 22-23 * * 1-5'  # UTC 22:00-23:55 Mon-Fri
+    - cron: '*/5 0-1 * * 2-6'    # UTC 00:00-01:00 Tue-Sat
+
+  workflow_dispatch:
+
+jobs:
+  etf-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check ETF Holdings
+        run: |
+          response=$(curl -s -w "\n%{http_code}" \
+            "${{ secrets.RENDER_SERVICE_URL }}/run/etf-check?token=${{ secrets.API_SECRET_TOKEN }}")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "Response: $body"
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" != "200" ]; then
+            echo "Request failed"
+            exit 1
+          fi

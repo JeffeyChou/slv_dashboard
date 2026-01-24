@@ -1,0 +1,46 @@
+# GitHub Actions - Scheduled Tasks for Silver Market Bot
+# Triggers Render web service endpoints on schedule
+
+name: Scheduled Tasks
+
+on:
+  schedule:
+    # Hourly Update: Mon-Fri 8:00-20:00 EST = UTC 13:00-01:00
+    # Split into two schedules to avoid crossing midnight
+    - cron: '0 13-23 * * 1-5'  # UTC 13:00-23:00 Mon-Fri
+    - cron: '0 0-1 * * 2-6'    # UTC 00:00-01:00 Tue-Sat (= EST Mon-Fri evening)
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      task:
+        description: 'Task to run'
+        required: true
+        default: 'hourly'
+        type: choice
+        options:
+          - hourly
+          - daily
+          - etf-check
+
+jobs:
+  hourly-update:
+    runs-on: ubuntu-latest
+    # Only run on schedule or manual hourly trigger
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.task == 'hourly')
+    steps:
+      - name: Trigger Hourly Update
+        run: |
+          response=$(curl -s -w "\n%{http_code}" \
+            "${{ secrets.RENDER_SERVICE_URL }}/run/hourly?token=${{ secrets.API_SECRET_TOKEN }}")
+
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "Response: $body"
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" != "200" ]; then
+            echo "Request failed with status $http_code"
+            exit 1
+          fi
