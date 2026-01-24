@@ -1,0 +1,49 @@
+# Render Blueprint - Silver Market Bot
+# https://render.com/docs/blueprint-spec
+
+services:
+  # Main Web Service
+  - type: web
+    name: slv-dashboard
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: METALS_DEV_KEY
+        sync: false
+      - key: API_SECRET_TOKEN
+        generateValue: true
+      - key: PORT
+        value: 10000
+
+  # Cron Job - Hourly Update (Mon-Fri 8:00-20:00 EST)
+  - type: cron
+    name: slv-hourly-update
+    runtime: docker
+    schedule: "0 13-1 * * 1-5"  # UTC = EST + 5
+    dockerCommand: python app.py hourly --webhook
+    envVars:
+      - fromService:
+          type: web
+          name: slv-dashboard
+          envVarKey: DISCORD_WEBHOOK_URL
+      - fromService:
+          type: web
+          name: slv-dashboard
+          envVarKey: METALS_DEV_KEY
+
+  # Cron Job - ETF Monitor (Mon-Fri 17:00-20:00 EST, every 5 min)
+  - type: cron
+    name: slv-etf-monitor
+    runtime: docker
+    schedule: "*/5 22-1 * * 1-5"  # UTC = EST + 5
+    dockerCommand: python app.py etf-check --webhook
+    envVars:
+      - fromService:
+          type: web
+          name: slv-dashboard
+          envVarKey: DISCORD_WEBHOOK_URL
