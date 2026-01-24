@@ -64,13 +64,18 @@ def create_app():
         status_code = 200 if result.success else 500
         return jsonify(result.to_dict()), status_code
 
+    def verify_token():
+        """Verify API token from request."""
+        from urllib.parse import unquote
+        token = request.args.get("token", "")
+        token = unquote(token)  # Handle URL-encoded tokens
+        expected = os.getenv("API_SECRET_TOKEN")
+        return not expected or token == expected
+
     @app.route("/run/hourly")
     def api_hourly():
         """Run hourly market update via HTTP."""
-        # Optional: verify secret token
-        token = request.args.get("token")
-        expected = os.getenv("API_SECRET_TOKEN")
-        if expected and token != expected:
+        if not verify_token():
             return jsonify({"error": "Unauthorized"}), 401
 
         force = request.args.get("force", "false").lower() == "true"
@@ -85,9 +90,7 @@ def create_app():
     @app.route("/run/daily")
     def api_daily():
         """Run daily report via HTTP."""
-        token = request.args.get("token")
-        expected = os.getenv("API_SECRET_TOKEN")
-        if expected and token != expected:
+        if not verify_token():
             return jsonify({"error": "Unauthorized"}), 401
 
         result = run_daily()
@@ -96,9 +99,7 @@ def create_app():
     @app.route("/run/etf-check")
     def api_etf_check():
         """Check ETF holdings changes via HTTP."""
-        token = request.args.get("token")
-        expected = os.getenv("API_SECRET_TOKEN")
-        if expected and token != expected:
+        if not verify_token():
             return jsonify({"error": "Unauthorized"}), 401
 
         result = run_etf_check()
@@ -113,9 +114,7 @@ def create_app():
     def download_db():
         """Download SQLite database for backup."""
         from flask import send_file
-        token = request.args.get("token")
-        expected = os.getenv("API_SECRET_TOKEN")
-        if expected and token != expected:
+        if not verify_token():
             return jsonify({"error": "Unauthorized"}), 401
 
         db_path = os.path.join(os.path.dirname(__file__), "cache", "silver_market.db")
