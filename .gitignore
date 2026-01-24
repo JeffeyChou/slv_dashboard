@@ -104,3 +104,6 @@ temp/
 # Database
 *.sqlite
 *.sqlite3
+
+*.png
+*.csv

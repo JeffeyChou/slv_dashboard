@@ -20,30 +20,46 @@ services:
       - key: PORT
         value: 10000
 
-  # Cron Job - Hourly Update (Mon-Fri 8:00-20:00 EST)
+  # Cron Job - Hourly Update (Mon-Fri 13:00-23:59 UTC = 8:00-18:59 EST)
   - type: cron
-    name: slv-hourly-update
+    name: slv-hourly-am
     runtime: docker
-    schedule: "0 13-1 * * 1-5"  # UTC = EST + 5
+    schedule: "0 13-23 * * 1-5"
     dockerCommand: python app.py hourly --webhook
     envVars:
-      - fromService:
-          type: web
-          name: slv-dashboard
-          envVarKey: DISCORD_WEBHOOK_URL
-      - fromService:
-          type: web
-          name: slv-dashboard
-          envVarKey: METALS_DEV_KEY
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: METALS_DEV_KEY
+        sync: false
 
-  # Cron Job - ETF Monitor (Mon-Fri 17:00-20:00 EST, every 5 min)
+  # Cron Job - Hourly Update (Mon-Fri 00:00-01:00 UTC = 19:00-20:00 EST)
   - type: cron
-    name: slv-etf-monitor
+    name: slv-hourly-pm
     runtime: docker
-    schedule: "*/5 22-1 * * 1-5"  # UTC = EST + 5
+    schedule: "0 0-1 * * 2-6"
+    dockerCommand: python app.py hourly --webhook
+    envVars:
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+      - key: METALS_DEV_KEY
+        sync: false
+
+  # Cron Job - ETF Monitor (Mon-Fri 22:00-23:59 UTC = 17:00-18:59 EST)
+  - type: cron
+    name: slv-etf-monitor-am
+    runtime: docker
+    schedule: "*/5 22-23 * * 1-5"
     dockerCommand: python app.py etf-check --webhook
     envVars:
-      - fromService:
-          type: web
-          name: slv-dashboard
-          envVarKey: DISCORD_WEBHOOK_URL
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
+
+  # Cron Job - ETF Monitor (Mon-Fri 00:00-01:00 UTC = 19:00-20:00 EST)
+  - type: cron
+    name: slv-etf-monitor-pm
+    runtime: docker
+    schedule: "*/5 0-1 * * 2-6"
+    dockerCommand: python app.py etf-check --webhook
+    envVars:
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
