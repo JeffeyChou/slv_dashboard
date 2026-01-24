@@ -20,8 +20,6 @@ on:
         options:
           - hourly
           - daily
-          - etf-check
-          - sync-db
 
 jobs:
   hourly-update:
@@ -62,54 +60,4 @@ jobs:
           if [ "$http_code" != "200" ]; then
             echo "Request failed"
             exit 1
-          fi
-
-  etf-check-manual:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.task == 'etf-check'
-    steps:
-      - name: Check ETF Holdings
-        run: |
-          response=$(curl -s -w "\n%{http_code}" \
-            "${{ secrets.RENDER_SERVICE_URL }}/run/etf-check?token=${{ secrets.API_SECRET_TOKEN }}")
-
-          http_code=$(echo "$response" | tail -n1)
-          body=$(echo "$response" | sed '$d')
-
-          echo "Response: $body"
-          echo "HTTP Code: $http_code"
-
-          if [ "$http_code" != "200" ]; then
-            echo "Request failed"
-            exit 1
-          fi
-
-  sync-database:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.task == 'sync-db'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download database from Render
-        run: |
-          curl -s -o cache/silver_market.db \
-            "${{ secrets.RENDER_SERVICE_URL }}/download/db?token=${{ secrets.API_SECRET_TOKEN }}" || true
-
-          if [ -f cache/silver_market.db ]; then
-            echo "Database downloaded successfully"
-            ls -la cache/
-          else
-            echo "No database to download"
-          fi
-
-      - name: Commit database
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          if [ -f cache/silver_market.db ]; then
-            git add cache/silver_market.db
-            git diff --staged --quiet || git commit -m "chore: sync database $(date -u +%Y-%m-%d)"
-            git push
           fi

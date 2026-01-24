@@ -1,0 +1,42 @@
+# GitHub Actions - Database Sync for Silver Market Bot
+# Backs up SQLite database from Render to GitHub
+
+name: Sync Database
+
+on:
+  schedule:
+    # Daily backup at UTC 02:00 (EST 21:00)
+    - cron: '0 2 * * *'
+
+  workflow_dispatch:
+
+jobs:
+  sync-database:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download database from Render
+        run: |
+          mkdir -p cache
+          curl -s -o cache/silver_market.db \
+            "${{ secrets.RENDER_SERVICE_URL }}/download/db?token=${{ secrets.API_SECRET_TOKEN }}" || true
+
+          if [ -f cache/silver_market.db ]; then
+            echo "Database downloaded successfully"
+            ls -la cache/
+          else
+            echo "No database to download"
+          fi
+
+      - name: Commit database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [ -f cache/silver_market.db ]; then
+            git add cache/silver_market.db
+            git diff --staged --quiet || git commit -m "chore: sync database $(date -u +%Y-%m-%d)"
+            git push
+          fi
