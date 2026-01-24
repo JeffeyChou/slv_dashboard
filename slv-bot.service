@@ -1,0 +1,17 @@
+[Unit]
+Description=Silver Market Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/project/slv_dashboard
+Environment="PATH=/usr/bin:/usr/local/bin"
+ExecStart=/usr/bin/python3 /home/ubuntu/project/slv_dashboard/discord_bot.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/project/slv_dashboard/bot.log
+StandardError=append:/home/ubuntu/project/slv_dashboard/bot.log
+
+[Install]
+WantedBy=multi-user.target

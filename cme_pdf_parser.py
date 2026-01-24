@@ -164,39 +164,44 @@ class CMEDeliveryParser:
 
         try:
             with pdfplumber.open(pdf_bytes) as pdf:
-                full_text = ""
+                # Search all pages for SILVER section
+                silver_section = None
                 for page in pdf.pages:
-                    full_text += page.extract_text() + "\n"
+                    text = page.extract_text()
+                    
+                    # Look for CONTRACT line that contains SILVER
+                    if re.search(r"CONTRACT:.*SILVER FUTURES", text):
+                        # Extract from CONTRACT: to next EXCHANGE: or end
+                        start = text.find("CONTRACT:")
+                        if start == -1:
+                            continue
+                        
+                        # Verify this CONTRACT line is actually for SILVER
+                        contract_line_end = text.find("\n", start)
+                        contract_line = text[start:contract_line_end]
+                        if "SILVER" not in contract_line:
+                            continue
+                        
+                        # Find end marker (next contract or end of page)
+                        end = len(text)
+                        next_exchange = text.find("EXCHANGE:", start + 100)
+                        if next_exchange != -1:
+                            end = next_exchange
+                        
+                        silver_section = text[start:end]
+                        break
 
-                # Find the COMEX 5000 SILVER FUTURES section dynamically
-                # Look for any month pattern like "JANUARY 2026 COMEX 5000 SILVER FUTURES"
-                contract_match = re.search(
-                    r"CONTRACT:\s+(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{4}\s+COMEX\s+5000\s+SILVER\s+FUTURES",
-                    full_text,
-                    re.IGNORECASE,
-                )
-
-                if not contract_match:
+                if not silver_section:
                     return {
                         "error": "COMEX 5000 SILVER FUTURES contract not found",
                         "note": "Market may be closed (holiday/weekend)",
                     }
 
-                start = contract_match.start()
-
-                # Find the end of this section (before MICRO SILVER or next contract)
-                end_markers = ["MICRO SILVER FUTURES", "EXCHANGE: COMEX"]
-                end = len(full_text)
-                for marker in end_markers:
-                    marker_pos = full_text.find(marker, start + 100)
-                    if marker_pos != -1:
-                        end = min(end, marker_pos)
-
-                silver_section = full_text[start:end]
-
                 # Extract date patterns: MM/DD/YYYY DAILY CUMULATIVE
+                # Match lines with date followed by two numbers
                 matches = re.findall(
-                    r"(\d{1,2}/\d{1,2}/\d{4})\s+([0-9,]+)\s+([0-9,]+)", silver_section
+                    r"(\d{1,2}/\d{1,2}/\d{4})\s+([0-9,]+)\s+([0-9,]+)", 
+                    silver_section
                 )
 
                 if not matches:
@@ -233,7 +238,22 @@ if __name__ == "__main__":
     parser = CMEDeliveryParser()
 
     print("=" * 60)
-    print("Testing CME Daily Issues & Stops Parser (v2)")
+    print("Testing CME Last 3 Days Silver Deliveries")
+    print("=" * 60)
+    last_3 = parser.parse_last_3_days_silver()
+    
+    if "data" in last_3:
+        print("✅ Successfully extracted delivery data:")
+        for entry in last_3["data"]:
+            print(f"  • {entry['intent_date']}: {entry['daily_total']} daily, {entry['total_cumulative']} cumulative")
+        print(f"\nSource: {last_3['source']}")
+    else:
+        print(f"❌ Error: {last_3.get('error')}")
+        if 'note' in last_3:
+            print(f"   Note: {last_3['note']}")
+
+    print("\n" + "=" * 60)
+    print("Testing CME Daily Issues & Stops Parser")
     print("=" * 60)
     daily = parser.parse_daily_issues_stops()
     print(f"Daily Result:")
@@ -241,7 +261,7 @@ if __name__ == "__main__":
         print(f"  {key}: {value}")
 
     print("\n" + "=" * 60)
-    print("Testing CME MTD Deliveries Parser (v2)")
+    print("Testing CME MTD Deliveries Parser")
     print("=" * 60)
     mtd = parser.parse_mtd_deliveries()
     print(f"MTD Result:")
