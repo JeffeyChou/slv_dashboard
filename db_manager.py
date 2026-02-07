@@ -226,6 +226,28 @@ class DBManager:
             row = cursor.fetchone()
             return row[0] if row else None
 
+    def get_last_metric_value_before_date(self, metric_name, date_str):
+        """
+        Get the most recent value for a metric BEFORE a specific date.
+        Useful for comparing against previous day's closing value.
+        date_str should be in 'YYYY-MM-DD' format.
+        """
+        # Ensure we look for timestamps strictly before the target date (at 00:00:00)
+        # or before the target timestamp if it's a full datetime
+        if len(date_str) == 10:  # YYYY-MM-DD
+            cutoff = f"{date_str} 00:00:00"
+        else:
+            cutoff = date_str
+
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "SELECT value FROM metrics WHERE metric_name = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT 1",
+                (metric_name, cutoff),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+
     # ============ Cache Methods (replaces JSON files) ============
 
     def get_cache(self, key, ttl_hours=24):

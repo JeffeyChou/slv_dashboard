@@ -20,6 +20,7 @@ import concurrent.futures
 from datetime import datetime
 import pytz
 import logging
+import requests
 
 # Setup logging
 logging.basicConfig(
@@ -138,62 +139,88 @@ async def send_or_edit_message(channel, content, message_id=None, file=None):
         logger.error(f"Message send/edit failed: {e}")
         return None
 
+    except Exception as e:
+        logger.error(f"Message send/edit failed: {e}")
+        return None
 
-@tasks.loop(minutes=60)
-async def scheduled_hourly_task():
-    """Hourly market update task (Mon-Fri 8:00-20:00 EST)"""
-    if not active_channels:
-        return  # Silent skip if no channels set
+def send_to_webhook(content=None, file_path=None):
+    """Send message/file to the configured Discord Webhook URL."""
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        return
+    
+    try:
+        data = {}
+        if content:
+            data["content"] = content
+        
+        if file_path and os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                files = {"file": (os.path.basename(file_path), f)}
+                if content:
+                    # When sending file, content needs to be payload_json if complex, 
+                    # or just data field if simple. requests handles 'data' fine with 'files'.
+                    requests.post(webhook_url, data=data, files=files, timeout=30)
+                else:
+                    requests.post(webhook_url, files=files, timeout=30)
+        else:
+            requests.post(webhook_url, json=data, timeout=10)
+            
+        logger.info("Message sent to Webhook")
+    except Exception as e:
+        logger.error(f"Failed to send to webhook: {e}")
 
-    # Check if within market hours
-    if not is_market_hours():
-        now_est = datetime.now(EST)
-        logger.info(
-            f"⏰ [{now_est.strftime('%H:%M')} EST] Outside market hours, skipping hourly update"
-        )
+@tasks.loop(minutes=1)
+async def scheduled_daily_market_task():
+    """
+    Daily market update at 5:00 PM EST (Mon-Fri).
+    Replaces the hourly update.
+    """
+    now_est = datetime.now(EST)
+    
+    # Check if weekday (Mon-Fri)
+    if now_est.weekday() >= 5:
         return
 
-    now_est = datetime.now(EST)
-    logger.info(f"🔄 [{now_est.strftime('%H:%M')} EST] Running scheduled hourly update...")
+    # Check if 17:00 (5 PM)
+    if not (now_est.hour == 17 and now_est.minute == 0):
+        return
+
+    logger.info(f"🔄 [{now_est.strftime('%H:%M')} EST] Running daily 5 PM market update...")
 
     try:
         loop = asyncio.get_running_loop()
-        # Add timeout to prevent hanging
+        # Fetch Data
         result = await asyncio.wait_for(
             loop.run_in_executor(
-                executor, lambda: get_market_update_message(force=False)
+                executor, lambda: get_market_update_message(force=True)
             ),
-            timeout=120  # 2 minute timeout
+            timeout=180
         )
         msg, etf_updated = result
 
-        # Update all active channels
-        for channel_id, msg_ids in active_channels.items():
-            channel = bot.get_channel(channel_id)
-            if channel:
-                # Edit existing message or send new if no message ID stored
-                new_msg_id = await send_or_edit_message(channel, msg, msg_ids.get("data_msg_id"))
-                active_channels[channel_id]["data_msg_id"] = new_msg_id
+        # 1. Send to Active Channels (Bot)
+        if active_channels:
+            for channel_id, msg_ids in active_channels.items():
+                channel = bot.get_channel(channel_id)
+                if channel:
+                    # Send new message (user requested "no hourly update data", so maybe just send new one)
+                    # For daily summary, a new message is cleaner than editing old one.
+                    # But if we want to maintain the "dashboard" feel, we might edit.
+                    # User said "trigger send message", implies a notification.
+                    # I'll stick to sending a new message for visibility.
+                    await channel.send(msg)
+                    logger.info(f"✅ Daily update sent to channel {channel_id}")
+        
+        # 2. Send to Webhook (URL)
+        send_to_webhook(content=msg)
 
-                # If ETF data was updated, send a separate notification
-                if etf_updated:
-                    await channel.send(
-                        "📊 **ETF data updated!** Use `/update_plot` to refresh the chart."
-                    )
-                logger.info(f"✅ Hourly update sent to channel {channel_id}")
-            else:
-                logger.error(f"Could not find channel {channel_id}")
-
-    except asyncio.TimeoutError:
-        logger.error(f"Scheduled update timed out after 120s")
     except Exception as e:
-        logger.error(f"Scheduled update failed: {e}", exc_info=True)
+        logger.error(f"Daily update failed: {e}", exc_info=True)
 
-
-@scheduled_hourly_task.error
-async def scheduled_hourly_task_error(error):
-    """Handle errors in scheduled task to prevent bot crash"""
-    logger.error(f"Critical error in hourly task: {error}", exc_info=True)
+@scheduled_daily_market_task.error
+async def scheduled_daily_market_task_error(error):
+    logger.error(f"Critical error in daily market task: {error}", exc_info=True)
 
 
 @tasks.loop(minutes=5)
@@ -206,14 +233,12 @@ async def etf_monitor_task():
 async def etf_monitor_task():
     """
     Monitor ETF holdings changes every 5 minutes.
-    Only active during Mon-Fri 17:00-20:00 EST.
+    Active window: Mon-Fri 17:00-20:00 EST.
     """
-    if not active_channels:
-        return  # Silent skip if no channels set
-
-    # Check if within monitor window (weekdays 17:00-20:00 EST)
-    if not is_etf_monitor_window():
-        return  # Outside monitor window, skip silently
+    # Check if within window (17:00 - 20:00 EST)
+    now_est = datetime.now(EST)
+    if not (now_est.weekday() < 5 and 17 <= now_est.hour < 20):
+        return  # Outside monitor window
 
     now_est = datetime.now(EST)
     logger.info(f"🔍 [{now_est.strftime('%H:%M')} EST] Checking ETF holdings...")
@@ -257,13 +282,17 @@ async def etf_monitor_task():
                 if channel:
                     await channel.send(msg)
                     logger.info(f"✅ ETF change notification sent to channel {channel_id}")
+            
+            # Send to Webhook
+            send_to_webhook(content=msg)
         else:
-            logger.info("   No changes detected")
+            logger.info("   No changes detected in ETF holdings")
 
     except asyncio.TimeoutError:
         logger.error(f"ETF monitor timed out after 60s")
     except Exception as e:
         logger.error(f"ETF monitor failed: {e}", exc_info=True)
+
 
 
 @etf_monitor_task.error
@@ -272,13 +301,77 @@ async def etf_monitor_task_error(error):
     logger.error(f"Critical error in ETF monitor: {error}", exc_info=True)
 
 
+@tasks.loop(minutes=1)
+async def daily_plot_task():
+    """
+    Generate and send ETF chart daily at 8:00 PM EST (Mon-Fri).
+    Runs regardless of market activity or whether data was updated.
+    """
+    """
+    Generate and send ETF chart daily at 8:00 PM EST (Mon-Fri).
+    Runs regardless of market activity.
+    """
+    # No check for active_channels here, as we might only have a webhook
+
+    now_est = datetime.now(EST)
+    
+    # Check if it's a weekday (Mon-Fri)
+    if now_est.weekday() >= 5:
+        return
+
+    # Check if time is 20:00 (8 PM)
+    if not (now_est.hour == 20 and now_est.minute == 0):
+        return
+        
+    logger.info(f"📊 [20:00 EST] Running daily 8 PM plot task...")
+
+    try:
+        # Generate chart
+        loop = asyncio.get_running_loop()
+        chart_path = await loop.run_in_executor(
+            executor, lambda: task_daily_main(send_discord=False)
+        )
+
+        if chart_path and os.path.exists(chart_path):
+            file_name = "etf_holdings_report.png"
+            content = f"**📊 Daily ETF Holdings Report** - {now_est.strftime('%Y-%m-%d %H:%M EST')}"
+
+            # 1. Send to Active Channels
+            if active_channels:
+                for channel_id in active_channels.keys():
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        file = discord.File(chart_path, filename=file_name)
+                        # We create a NEW file object for each send because it's a stream
+                        
+                        # Send new message
+                        await channel.send(content=content, file=file)
+                        logger.info(f"✅ Daily plot sent to channel {channel_id}")
+            
+            # 2. Send to Webhook
+            send_to_webhook(content=content, file_path=chart_path)
+            
+        else:
+            logger.info("Daily plot generation failed (no file returned)")
+
+    except Exception as e:
+        logger.error(f"Daily plot task failed: {e}", exc_info=True)
+
+
+@daily_plot_task.error
+async def daily_plot_task_error(error):
+    """Handle errors in daily plot task"""
+    logger.error(f"Critical error in daily plot task: {error}", exc_info=True)
+
+
 @bot.event
 async def on_ready():
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
     logger.info("=" * 50)
-    logger.info("Schedule:")
-    logger.info("  • Hourly updates: Mon-Fri 8:00-20:00 EST")
-    logger.info("  • ETF monitor: Mon-Fri 17:00-20:00 EST (every 5 mins)")
+    logger.info("Schedule (EST):")
+    logger.info("  • Daily Market Update: Mon-Fri 17:00 (5 PM)")
+    logger.info("  • ETF Monitor: Mon-Fri 17:00-20:00 (Every 5 mins)")
+    logger.info("  • Daily Chart: Mon-Fri 20:00 (8 PM)")
     logger.info("=" * 50)
     try:
         synced = await bot.tree.sync()
@@ -289,10 +382,10 @@ async def on_ready():
 
 @bot.tree.command(
     name="autorun_on",
-    description="Enable automatic updates and ETF monitor in this channel",
+    description="Enable automatic daily updates and ETF monitor in this channel",
 )
 async def autorun_on(interaction: discord.Interaction):
-    """Enable automatic hourly updates and ETF monitor"""
+    """Enable automatic daily updates and ETF monitor"""
     channel_id = interaction.channel_id
     
     # Add channel to active channels
@@ -301,13 +394,17 @@ async def autorun_on(interaction: discord.Interaction):
 
     tasks_started = []
 
-    if not scheduled_hourly_task.is_running():
-        scheduled_hourly_task.start()
-        tasks_started.append("hourly updates (Mon-Fri 8:00-20:00 EST)")
+    if not scheduled_daily_market_task.is_running():
+        scheduled_daily_market_task.start()
+        tasks_started.append("Daily Market Update (Mon-Fri 17:00 EST)")
 
     if not etf_monitor_task.is_running():
         etf_monitor_task.start()
-        tasks_started.append("ETF monitor (Mon-Fri 17:00-20:00 EST)")
+        tasks_started.append("ETF Monitor (Mon-Fri 17:00-20:00 EST)")
+
+    if not daily_plot_task.is_running():
+        daily_plot_task.start()
+        tasks_started.append("Daily Chart (Mon-Fri 20:00 EST)")
 
     if tasks_started:
         await interaction.response.send_message(
@@ -413,7 +510,9 @@ async def update_plot(interaction: discord.Interaction):
     try:
         # Run synchronous task in thread pool
         loop = asyncio.get_running_loop()
-        chart_path = await loop.run_in_executor(executor, task_daily_main)
+        chart_path = await loop.run_in_executor(
+            executor, lambda: task_daily_main(send_discord=False)
+        )
 
         # Send to the channel where command was invoked
         if chart_path and os.path.exists(chart_path):
@@ -453,8 +552,9 @@ async def status(interaction: discord.Interaction):
         f"**🤖 Bot Status** - {now_est.strftime('%Y-%m-%d %H:%M EST')}",
         "",
         f"**Schedule:**",
-        f"• Hourly updates: {'🟢 Running' if scheduled_hourly_task.is_running() else '🔴 Stopped'}",
-        f"• ETF monitor: {'🟢 Running' if etf_monitor_task.is_running() else '🔴 Stopped'}",
+        f"• Daily Update (17:00): {'🟢 Running' if scheduled_daily_market_task.is_running() else '🔴 Stopped'}",
+        f"• ETF Monitor (17:00-20:00): {'🟢 Running' if etf_monitor_task.is_running() else '🔴 Stopped'}",
+        f"• Daily Chart (20:00): {'🟢 Running' if daily_plot_task.is_running() else '🔴 Stopped'}",
         "",
         f"**Current Time Windows:**",
         f"• Market hours (8:00-20:00): {'✅ Active' if is_market_hours() else '❌ Inactive'}",
@@ -544,6 +644,106 @@ async def recall_plot(interaction: discord.Interaction):
         await interaction.response.send_message(
             f"❌ Error deleting message: {str(e)}",
             ephemeral=True
+        )
+
+
+
+@bot.tree.command(
+    name="send_to_webhook_data",
+    description="Manually update data and send to the external Webhook URL",
+)
+async def send_to_webhook_data(interaction: discord.Interaction):
+    """Force update data and send to the external Webhook URL"""
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        await interaction.response.send_message(
+            "❌ Webhook URL not configured in .env", ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        "🔄 Fetching data and sending to Webhook...", ephemeral=True
+    )
+
+    try:
+        # Run synchronous task in thread pool
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            executor, lambda: get_market_update_message(force=True)
+        )
+        msg, _ = result
+
+        # Send to Webhook
+        def _send():
+            resp = requests.post(webhook_url, json={"content": msg}, timeout=10)
+            return resp.status_code
+
+        status_code = await loop.run_in_executor(executor, _send)
+
+        if status_code in [200, 204]:
+            await interaction.followup.send("✅ Data sent to Webhook successfully!", ephemeral=True)
+        else:
+            await interaction.followup.send(
+                f"⚠️ Webhook returned status {status_code}", ephemeral=True
+            )
+
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Error sending to Webhook: {str(e)}", ephemeral=True
+        )
+
+
+@bot.tree.command(
+    name="send_to_webhook_chart",
+    description="Manually generate chart and send to the external Webhook URL",
+)
+async def send_to_webhook_chart(interaction: discord.Interaction):
+    """Generate chart and send to the external Webhook URL"""
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        await interaction.response.send_message(
+            "❌ Webhook URL not configured in .env", ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        "📊 Generating chart and sending to Webhook...", ephemeral=True
+    )
+
+    try:
+        # Run synchronous task in thread pool
+        loop = asyncio.get_running_loop()
+        chart_path = await loop.run_in_executor(
+            executor, lambda: task_daily_main(send_discord=False)
+        )
+
+        if chart_path and os.path.exists(chart_path):
+            # Send to Webhook with file
+            def _send():
+                with open(chart_path, "rb") as f:
+                    now_est = datetime.now(EST)
+                    content = f"**📊 Daily ETF Holdings Report** - {now_est.strftime('%Y-%m-%d %H:%M EST')}"
+                    files = {"file": ("etf_holdings_report.png", f)}
+                    data = {"content": content}
+                    resp = requests.post(webhook_url, data=data, files=files, timeout=30)
+                return resp.status_code
+
+            status_code = await loop.run_in_executor(executor, _send)
+
+            if status_code in [200, 204]:
+                await interaction.followup.send("✅ Chart sent to Webhook successfully!", ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    f"⚠️ Webhook returned status {status_code}", ephemeral=True
+                )
+        else:
+            await interaction.followup.send(
+                "❌ Chart generation failed (no file returned).", ephemeral=True
+            )
+
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Error sending to Webhook: {str(e)}", ephemeral=True
         )
 
 

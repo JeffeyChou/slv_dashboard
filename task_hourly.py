@@ -216,82 +216,64 @@ def fetch_gold_spot():
 
 
 def fetch_trump_medallions(db, force=False):
-    """Fetch Trump medallion prices from realtrumpcoins.com"""
+    """Fetch Trump medallion prices from realtrumpcoins.com using Shopify JSON API"""
     cache_key = "trump_medallions"
     
     if not force:
-        cached = read_cache(db, cache_key, ttl_hours=24)
+        cached, age = read_cache(db, cache_key, ttl_hours=24)
         if cached:
-            print(f"✓ Trump Medallions (cached)")
+            print(f"✓ Trump Medallions (cached {age}h)")
             return cached, True
     
     try:
         import requests
-        from bs4 import BeautifulSoup
-        import re
         
         medallions = {}
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         
         # Silver medallion
         try:
-            url_silver = "https://realtrumpcoins.com/products/1-oz-pf70-president-trump-second-edition-silver-medallion"
+            url_silver = "https://realtrumpcoins.com/products/1-oz-pf70-president-trump-second-edition-silver-medallion.js"
             resp = requests.get(url_silver, headers=headers, timeout=10)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            # Try multiple selectors
-            price_elem = soup.select_one('.price-item--regular') or soup.select_one('.price__regular') or soup.select_one('[class*="price"]')
-            
-            if price_elem:
-                price_text = price_elem.text.strip()
-                # Extract just the number using regex
-                match = re.search(r'(\d+(?:,\d{3})*(?:\.\d{2})?)', price_text)
-                if match:
-                    price_str = match.group(1).replace(',', '')
-                    medallions['silver'] = float(price_str)
+            if resp.status_code == 200:
+                data = resp.json()
+                price = data.get('price', 0) / 100.0
+                if price > 0:
+                    medallions['silver'] = price
                     print(f"✓ Trump Silver: ${medallions['silver']}")
             else:
-                print(f"⚠ Could not find silver price element")
+                print(f"⚠ Could not fetch silver price JSON (Status {resp.status_code})")
         except Exception as e:
             print(f"⚠ Trump Silver Medallion error: {e}")
-            medallions['silver'] = None
         
         # Gold medallion
         try:
-            url_gold = "https://realtrumpcoins.com/products/1oz-pf70-president-trump-second-edition-gold-medallion"
+            url_gold = "https://realtrumpcoins.com/products/1oz-pf70-president-trump-second-edition-gold-medallion.js"
             resp = requests.get(url_gold, headers=headers, timeout=10)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            # Try multiple selectors
-            price_elem = soup.select_one('.price-item--regular') or soup.select_one('.price__regular') or soup.select_one('[class*="price"]')
-            
-            if price_elem:
-                price_text = price_elem.text.strip()
-                # Extract just the number using regex
-                match = re.search(r'(\d+(?:,\d{3})*(?:\.\d{2})?)', price_text)
-                if match:
-                    price_str = match.group(1).replace(',', '')
-                    medallions['gold'] = float(price_str)
+            if resp.status_code == 200:
+                data = resp.json()
+                price = data.get('price', 0) / 100.0
+                if price > 0:
+                    medallions['gold'] = price
                     print(f"✓ Trump Gold: ${medallions['gold']}")
             else:
-                print(f"⚠ Could not find gold price element")
+                print(f"⚠ Could not fetch gold price JSON (Status {resp.status_code})")
         except Exception as e:
             print(f"⚠ Trump Gold Medallion error: {e}")
-            medallions['gold'] = None
         
-        if medallions.get('silver') or medallions.get('gold'):
-            # Get previous day's prices for delta calculation
-            prev_data = db.get_metric_delta("trump_silver_price")
-            if prev_data:
-                medallions['silver_change'] = medallions.get('silver', 0) - prev_data
-            else:
-                medallions['silver_change'] = 0
+        if medallions:
+            # Get previous prices to calculate change (from previous day)
+            today_str = datetime.now().strftime("%Y-%m-%d")
             
-            prev_gold = db.get_metric_delta("trump_gold_price")
-            if prev_gold:
-                medallions['gold_change'] = medallions.get('gold', 0) - prev_gold
-            else:
-                medallions['gold_change'] = 0
+            if 'silver' in medallions:
+                prev_silver = db.get_last_metric_value_before_date("trump_silver_price", today_str)
+                medallions['silver_prev'] = prev_silver
+                medallions['silver_change'] = (medallions['silver'] - prev_silver) if prev_silver else 0
+            
+            if 'gold' in medallions:
+                prev_gold = db.get_last_metric_value_before_date("trump_gold_price", today_str)
+                medallions['gold_prev'] = prev_gold
+                medallions['gold_change'] = (medallions['gold'] - prev_gold) if prev_gold else 0
             
             write_cache(db, cache_key, medallions)
             return medallions, False
@@ -537,8 +519,8 @@ def get_market_update_message(force=False):
     """Generate the market update message string"""
     db = DBManager()
 
-    # === HOURLY DATA ===
-    print("\n=== Hourly Data (Real-time) ===")
+    # === REAL-TIME DATA ===
+    print("\n=== Real-time Data ===")
     xagusd = fetch_xagusd()
     shfe = fetch_shanghai_td()
     comex = fetch_comex_futures()
@@ -650,13 +632,22 @@ def get_market_update_message(force=False):
     if gold_spot:
         msg += f"• XAU/USD Spot: **${gold_spot:.2f}**/oz\n"
     if comex:
-        msg += f"• COMEX Futures (SIH26): **${comex['price']:.2f}**/oz\n"
+        price_val = comex['price']
+        prev_close = comex.get('previous_close')
+        change_str = ""
+        if prev_close:
+            diff = price_val - prev_close
+            pct = (diff / prev_close) * 100
+            arrow = "🔺" if diff > 0 else "🔻" if diff < 0 else "➡️"
+            change_str = f" {arrow}${abs(diff):.2f} ({pct:+.2f}%)"
+            
+        msg += f"• COMEX (SIH26): **${price_val:.2f}**/oz{change_str}\n"
         if comex.get("oi"):
             msg += f"  └ OI: {comex['oi']:,}"
             if comex.get("delta_oi") is not None:
                 msg += f" (ΔOI: {comex['delta_oi']:+,.0f})"
             msg += "\n"
-            msg += f"  └ Holdings in contract: {(comex['oi'] * 5000):,.0f} oz\n"
+            msg += f"  └ Physical equiv: {(comex['oi'] * 5000 / 32150.7):,.2f}t\n"
     if shfe:
         msg += f"• SHFE Ag (XOH26): **${shfe.get('price_usd_oz')}**/oz (¥{shfe.get('price_cny_kg', 0):,.0f}/kg)"
         if shfe.get("change_pct") is not None:
@@ -667,6 +658,7 @@ def get_market_update_message(force=False):
             if shfe.get("delta_oi") is not None:
                 msg += f" (ΔOI: {shfe['delta_oi']:+,.0f})"
             msg += "\n"
+            msg += f"  └ Physical equiv: {(shfe['oi'] * 15 / 1000):,.2f}t\n"
         if xagusd and shfe.get("price_usd_oz"):
             premium = shfe["price_usd_oz"] - xagusd
             msg += f"  └ Shanghai Premium: **${premium:+.2f}**\n"
@@ -732,18 +724,31 @@ def get_market_update_message(force=False):
     if trump_medallions:
         msg += f"\n**🪙 Trump Medallions** `[Daily{'*' if not force else ' ✓'}]`\n"
         if trump_medallions.get('silver'):
-            premium_vs_spot = trump_medallions['silver'] - xagusd if xagusd else None
+            curr = trump_medallions['silver']
+            prev = trump_medallions.get('silver_prev')
             change = trump_medallions.get('silver_change', 0)
+            pct = (change / prev * 100) if prev and prev > 0 else 0
             arrow = "🔺" if change > 0 else "🔻" if change < 0 else "➡️"
-            msg += f"• Silver (1oz PF70): **${trump_medallions['silver']:.2f}** {arrow}${abs(change):.2f}"
+            premium_vs_spot = curr - xagusd if xagusd else None
+            
+            msg += f"• Silver (1oz PF70): **${curr:.2f}**"
+            if prev:
+                msg += f" (Prev: ${prev:.2f}) {arrow}${abs(change):.2f} ({pct:+.2f}%)"
             if premium_vs_spot:
                 msg += f" (Premium: ${premium_vs_spot:+.2f})"
             msg += "\n"
+            
         if trump_medallions.get('gold'):
-            premium_vs_gold = trump_medallions['gold'] - gold_spot if gold_spot else None
+            curr = trump_medallions['gold']
+            prev = trump_medallions.get('gold_prev')
             change = trump_medallions.get('gold_change', 0)
+            pct = (change / prev * 100) if prev and prev > 0 else 0
             arrow = "🔺" if change > 0 else "🔻" if change < 0 else "➡️"
-            msg += f"• Gold (1oz PF70): **${trump_medallions['gold']:.2f}** {arrow}${abs(change):.2f}"
+            premium_vs_gold = curr - gold_spot if gold_spot else None
+            
+            msg += f"• Gold (1oz PF70): **${curr:.2f}**"
+            if prev:
+                msg += f" (Prev: ${prev:.2f}) {arrow}${abs(change):.2f} ({pct:+.2f}%)"
             if premium_vs_gold:
                 msg += f" (Premium: ${premium_vs_gold:+.2f})"
             msg += "\n"

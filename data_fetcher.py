@@ -146,43 +146,111 @@ class SilverDataFetcher:
 
         return result
 
+    def _convert_symbol_to_cme_code(self, symbol):
+        """
+        Convert symbol like SIH26 to CME PDF code MAR26.
+        Map: F=JAN, G=FEB, H=MAR, J=APR, K=MAY, M=JUN, N=JUL, Q=AUG, U=SEP, V=OCT, X=NOV, Z=DEC
+        """
+        cme_month_map = {
+            'F': 'JAN', 'G': 'FEB', 'H': 'MAR', 'J': 'APR', 'K': 'MAY', 'M': 'JUN',
+            'N': 'JUL', 'Q': 'AUG', 'U': 'SEP', 'V': 'OCT', 'X': 'NOV', 'Z': 'DEC'
+        }
+        
+        # Assume format SI[MonthCode][Year] e.g. SIH26
+        # regex to capture month code and year
+        match = re.search(r"SI([FGHJKMNQUVXZ])(\d{2})", symbol)
+        if match:
+            code = match.group(1)
+            year = match.group(2)
+            month = cme_month_map.get(code)
+            if month:
+                return f"{month}{year}"
+        return None
+
     def get_futures_data(self):
         """
-        Fetch COMEX Silver Futures (SIH26 - March 2026) from Barchart.
-        Source: https://www.barchart.com/futures/quotes/SIH26/overview
+        Fetch COMEX Silver Futures (SIH26 - March 2026).
+        Prioritizes Barchart for contract specifics, falls back to Yahoo Finance.
+        Uses CME Daily Bulletin for authoritative OI and Delta OI.
         """
-        url = "https://www.barchart.com/futures/quotes/SIH26/overview"
-        data = self._fetch_barchart_data(url, "SIH26")
-
-        if data.get("error"):
-            return data
-
-        current_oi = data.get("openInterest")
-        delta_oi = None
-        if current_oi:
-            delta_oi = self.db.get_metric_delta("COMEX_Futures_OI")
-
+        symbol = "SIH26"
+        
+        # 1. Fetch Real-time/Delayed Price from Barchart
+        url = f"https://www.barchart.com/futures/quotes/{symbol}/overview"
+        data = self._fetch_barchart_data(url, symbol)
+        
         result = {
             "contract": "SIH26 (Mar 2026)",
-            "price": data.get("lastPrice"),
-            "open_interest": current_oi,
-            "volume": data.get("volume"),
-            "previous_close": data.get("previousClose"),
-            "change_pct": data.get("percentChange"),
-            "delta_oi": delta_oi,
-            "timestamp": data.get("timestamp"),
+            "price": None,
+            "open_interest": None,
+            "volume": None,
+            "previous_close": None,
+            "change_pct": None,
+            "delta_oi": None,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "source": "Barchart",
         }
 
-        # Store to database
-        if result.get("price"):
-            self.db.insert(
-                "COMEX_FUTURES", price=result["price"], raw_data=json.dumps(result)
-            )
-        if current_oi:
-            self.db.append_metrics(
-                {"COMEX_Futures_OI": current_oi, "COMEX_Futures_Price": result["price"]}
-            )
+        # Barchart Data
+        if not data.get("error"):
+            result.update({
+                "price": data.get("lastPrice"),
+                "volume": data.get("volume"),
+                "previous_close": data.get("previousClose"),
+                "change_pct": data.get("percentChange"),
+                "open_interest": data.get("openInterest"), # Fallback
+            })
+        else:
+            print(f"⚠ Barchart {symbol} failed, trying Yahoo Finance...")
+            try:
+                import yfinance as yf
+                t = yf.Ticker(f"{symbol}.CMX")
+                info = t.info
+                result.update({
+                    "price": info.get("regularMarketPrice") or info.get("currentPrice"),
+                    "volume": info.get("volume"),
+                    "previous_close": info.get("previousClose"),
+                    "open_interest": info.get("openInterest"),
+                    "source": "Yahoo Finance (CME)",
+                })
+                if result["price"] and result["previous_close"]:
+                    result["change_pct"] = round(((result["price"] - result["previous_close"]) / result["previous_close"]) * 100, 2)
+            except Exception as e:
+                print(f"⚠ Yahoo Finance {symbol} failed: {e}")
+
+        # 2. Fetch Official OI from CME PDF (Authoritative)
+        cme_code = self._convert_symbol_to_cme_code(symbol) # e.g. MAR26
+        if cme_code:
+            try:
+                parser = CMEDeliveryParser()
+                pdf_data = parser.parse_section62_daily_bulletin(target_contract_code=cme_code)
+                
+                if "error" not in pdf_data:
+                    # Overwrite OI and DeltaOI with official data
+                    result["open_interest"] = pdf_data["open_interest"]
+                    result["delta_oi"] = pdf_data["delta_oi"]
+                    result["source"] += " + CME PDF"
+                    
+                    # If we have no price yet, use PDF price (Close)
+                    if not result["price"]:
+                        result["price"] = pdf_data["price"]
+                        # Logic for change matching pdf?
+            except Exception as e:
+                print(f"⚠ CME PDF Parsing failed: {e}")
+
+        # 3. Fallback for Delta OI if not in PDF (e.g. PDF failed)
+        if result["open_interest"] and result["delta_oi"] is None:
+            result["delta_oi"] = self.db.get_metric_delta("COMEX_Futures_OI")
+            
+        # Record metrics
+        if result["open_interest"]:
+            self.db.append_metrics({
+                "COMEX_Futures_OI": result["open_interest"],
+                "COMEX_Futures_Price": result["price"]
+            })
+            
+        if result["price"]:
+            self.db.insert("COMEX_FUTURES", price=result["price"], raw_data=json.dumps(result))
 
         return result
 

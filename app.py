@@ -192,8 +192,9 @@ def cli_serve(args):
     """CLI: Start web server."""
     app = create_app()
     port = int(os.getenv("PORT", args.port))
-    logger.info(f"Starting web server on port {port}")
-    app.run(host="0.0.0.0", port=port, debug=args.debug)
+    host = args.host
+    logger.info(f"Starting web server on {host}:{port}")
+    app.run(host=host, port=port, debug=args.debug)
     return 0
 
 
@@ -207,6 +208,7 @@ def main():
     # serve command (default)
     serve_parser = subparsers.add_parser("serve", help="Start web server")
     serve_parser.add_argument("--port", type=int, default=10000)
+    serve_parser.add_argument("--host", type=str, default="0.0.0.0")
     serve_parser.add_argument("--debug", action="store_true")
     serve_parser.set_defaults(func=cli_serve)
 

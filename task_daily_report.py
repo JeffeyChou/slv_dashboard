@@ -386,7 +386,8 @@ def send_discord_images(*chart_paths):
             requests.post(WEBHOOK_URL, data=payload, files=files)
 
 
-def main():
+
+def main(send_discord=False):
     print("Generating daily silver report...")
 
     # Get 30 days of data
@@ -398,12 +399,14 @@ def main():
     etf_chart = generate_etf_holdings_charts()
     print(f"✓ ETF holdings chart: {etf_chart}")
 
-    # Send to Discord if running standalone
-    send_discord_images(etf_chart)
+    # Send to Discord if requested
+    if send_discord:
+        send_discord_images(etf_chart)
+        print("✅ Daily report charts sent to Discord")
 
-    print("✅ Daily report charts generated")
+    print(f"✅ Daily report charts generated at {etf_chart}")
     return etf_chart
 
 
 if __name__ == "__main__":
-    main()
+    main(send_discord=True)
