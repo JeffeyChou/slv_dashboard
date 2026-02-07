@@ -9,9 +9,5 @@ openpyxl
 matplotlib
 python-dotenv
 pytz
-discord.py
+discord
 xlrd
-
-# Web server
-flask
-gunicorn

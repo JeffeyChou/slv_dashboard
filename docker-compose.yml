@@ -1,0 +1,24 @@
+services:
+  # Web API and Scheduled Tasks (Internal Scheduler)
+  web:
+    build: .
+    container_name: slv-web
+    restart: always
+    ports:
+      - "10000:10000"
+    volumes:
+      - ./market_data.db:/app/market_data.db
+      - ./cache:/app/cache
+    env_file: .env
+    command: python app.py serve --port 10000
+
+  # Persistent Discord Bot
+  bot:
+    build: .
+    container_name: slv-bot
+    restart: always
+    volumes:
+      - ./market_data.db:/app/market_data.db
+      - ./cache:/app/cache
+    env_file: .env
+    command: python discord_bot.py

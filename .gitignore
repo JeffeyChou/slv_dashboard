@@ -104,10 +104,12 @@ temp/
 # Database
 *.sqlite
 *.sqlite3
+market_data.db
 
-# Allow cache/silver_market.db for persistence
-!cache/
-!cache/silver_market.db
+# Cache and persistent data
+cache/
+!cache/.gitkeep
 
 *.png
 *.csv
+__pycache__

@@ -22,16 +22,17 @@ from datetime import datetime
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] [%(levelname)-8s] %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
+    format="[%(asctime)s] [%(levelname)-8s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-    ]
+    ],
 )
 logger = logging.getLogger(__name__)
 
 # Load environment variables
 from dotenv import load_dotenv
+
 load_dotenv()
 
 
@@ -45,17 +46,19 @@ def create_app():
     @app.route("/")
     def index():
         """Root endpoint - service info."""
-        return jsonify({
-            "service": "Silver Market Bot",
-            "version": "2.0.0",
-            "endpoints": {
-                "/health": "Health check",
-                "/run/hourly": "Run hourly market update",
-                "/run/daily": "Run daily report (charts)",
-                "/run/etf-check": "Check ETF holdings changes",
-            },
-            "timestamp": datetime.utcnow().isoformat()
-        })
+        return jsonify(
+            {
+                "service": "Silver Market Bot",
+                "version": "2.0.0",
+                "endpoints": {
+                    "/health": "Health check",
+                    "/run/hourly": "Run hourly market update",
+                    "/run/daily": "Run daily report (charts)",
+                    "/run/etf-check": "Check ETF holdings changes",
+                },
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
 
     @app.route("/health")
     def health():
@@ -67,6 +70,7 @@ def create_app():
     def verify_token():
         """Verify API token from request."""
         from urllib.parse import unquote
+
         token = request.args.get("token", "")
         token = unquote(token)  # Handle URL-encoded tokens
         expected = os.getenv("API_SECRET_TOKEN")
@@ -114,10 +118,11 @@ def create_app():
     def download_db():
         """Download SQLite database for backup."""
         from flask import send_file
+
         if not verify_token():
             return jsonify({"error": "Unauthorized"}), 401
 
-        db_path = os.path.join(os.path.dirname(__file__), "cache", "silver_market.db")
+        db_path = os.path.join(os.path.dirname(__file__), "market_data.db")
         if os.path.exists(db_path):
             return send_file(db_path, as_attachment=True)
         return jsonify({"error": "Database not found"}), 404
@@ -128,16 +133,13 @@ def create_app():
 def send_to_webhook(message: str):
     """Send message to Discord webhook."""
     import requests
+
     webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
     if not webhook_url:
         return
 
     try:
-        requests.post(
-            webhook_url,
-            json={"content": message},
-            timeout=10
-        )
+        requests.post(webhook_url, json={"content": message}, timeout=10)
         logger.info("Message sent to Discord webhook")
     except Exception as e:
         logger.error(f"Failed to send webhook: {e}")
@@ -146,6 +148,7 @@ def send_to_webhook(message: str):
 def cli_hourly(args):
     """CLI: Run hourly task."""
     from core.tasks import run_hourly
+
     result = run_hourly(force=args.force)
     print(result.message)
     if args.webhook and result.success:
@@ -156,6 +159,7 @@ def cli_hourly(args):
 def cli_daily(args):
     """CLI: Run daily task."""
     from core.tasks import run_daily
+
     result = run_daily()
     print(f"Result: {result.message}")
     if result.file_path:
@@ -166,6 +170,7 @@ def cli_daily(args):
 def cli_etf_check(args):
     """CLI: Run ETF check."""
     from core.tasks import run_etf_check
+
     result = run_etf_check()
     print(result.message)
     if args.webhook and result.success and result.etf_updated:
@@ -176,6 +181,7 @@ def cli_etf_check(args):
 def cli_health(args):
     """CLI: Health check."""
     from core.tasks import health_check
+
     result = health_check()
     print(f"Status: {'OK' if result.success else 'FAIL'}")
     print(f"Details: {result.data}")

@@ -352,13 +352,14 @@ async def autorun_off(interaction: discord.Interaction):
 async def update_data(interaction: discord.Interaction):
     """Force update all data and send new message (becomes the target for auto-updates)"""
     channel_id = interaction.channel_id
-
+    
     # Ensure channel is in active_channels
     if channel_id not in active_channels:
         active_channels[channel_id] = {"data_msg_id": None, "plot_msg_id": None}
 
-    # Defer immediately to avoid 3-second timeout
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.send_message(
+        "🔄 Updating data... This may take a moment.", ephemeral=True
+    )
 
     try:
         # Run synchronous task in thread pool
@@ -402,13 +403,12 @@ async def update_data(interaction: discord.Interaction):
 async def update_plot(interaction: discord.Interaction):
     """Generate and send ETF chart (becomes the target for auto-updates)"""
     channel_id = interaction.channel_id
-
+    
     # Ensure channel is in active_channels
     if channel_id not in active_channels:
         active_channels[channel_id] = {"data_msg_id": None, "plot_msg_id": None}
 
-    # Defer immediately to avoid 3-second timeout
-    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.response.send_message("📊 Generating chart...", ephemeral=True)
 
     try:
         # Run synchronous task in thread pool
