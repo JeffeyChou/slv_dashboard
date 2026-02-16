@@ -16,6 +16,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
+import json
 import concurrent.futures
 from datetime import datetime
 import pytz
@@ -33,6 +34,33 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Persistence for active channels
+CHANNELS_FILE = os.path.join("cache", "active_channels.json")
+
+def save_active_channels():
+    try:
+        os.makedirs(os.path.dirname(CHANNELS_FILE), exist_ok=True)
+        with open(CHANNELS_FILE, "w") as f:
+            json.dump(active_channels, f)
+        logger.info(f"Saved {len(active_channels)} active channels to {CHANNELS_FILE}")
+    except Exception as e:
+        logger.error(f"Failed to save active channels: {e}")
+
+def load_active_channels():
+    global active_channels
+    if os.path.exists(CHANNELS_FILE):
+        try:
+            with open(CHANNELS_FILE, "r") as f:
+                data = json.load(f)
+                # Convert keys back to int
+                active_channels = {int(k): v for k, v in data.items()}
+            logger.info(f"Loaded {len(active_channels)} active channels from {CHANNELS_FILE}")
+        except Exception as e:
+            logger.error(f"Failed to load active channels: {e}")
+            active_channels = {}
+    else:
+        active_channels = {}
 
 # Import tasks
 from task_hourly import (
@@ -87,9 +115,9 @@ def is_market_hours():
 
 
 def is_etf_monitor_window():
-    """Check if current time is within ETF monitor window (Mon-Fri 17:00-20:00 EST)"""
+    """Check if current time is within ETF monitor window (Mon-Fri 16:00-21:00 EST)"""
     now_est = datetime.now(EST)
-    return is_weekday() and 17 <= now_est.hour < 20
+    return is_weekday() and 16 <= now_est.hour < 21
 
 
 def check_etf_changes():
@@ -135,10 +163,6 @@ async def send_or_edit_message(channel, content, message_id=None, file=None):
         else:
             new_msg = await channel.send(content=content)
         return new_msg.id
-    except Exception as e:
-        logger.error(f"Message send/edit failed: {e}")
-        return None
-
     except Exception as e:
         logger.error(f"Message send/edit failed: {e}")
         return None
@@ -227,20 +251,13 @@ async def scheduled_daily_market_task_error(error):
 async def etf_monitor_task():
     """
     Monitor ETF holdings changes every 5 minutes.
-    Only active during Mon-Fri 17:00-19:00 EST.
+    Active window: Mon-Fri 16:00-21:00 EST.
     """
-@tasks.loop(minutes=5)
-async def etf_monitor_task():
-    """
-    Monitor ETF holdings changes every 5 minutes.
-    Active window: Mon-Fri 17:00-20:00 EST.
-    """
-    # Check if within window (17:00 - 20:00 EST)
+    # Check if within window (16:00 - 21:00 EST)
     now_est = datetime.now(EST)
-    if not (now_est.weekday() < 5 and 17 <= now_est.hour < 20):
+    if not (now_est.weekday() < 5 and 16 <= now_est.hour < 21):
         return  # Outside monitor window
 
-    now_est = datetime.now(EST)
     logger.info(f"🔍 [{now_est.strftime('%H:%M')} EST] Checking ETF holdings...")
 
     try:
@@ -304,37 +321,38 @@ async def etf_monitor_task_error(error):
 @tasks.loop(minutes=1)
 async def daily_plot_task():
     """
-    Generate and send ETF chart daily at 8:00 PM EST (Mon-Fri).
-    Runs regardless of market activity or whether data was updated.
+    Generate and send Market Update and ETF chart daily at 8:30 PM EST (Mon-Fri).
     """
-    """
-    Generate and send ETF chart daily at 8:00 PM EST (Mon-Fri).
-    Runs regardless of market activity.
-    """
-    # No check for active_channels here, as we might only have a webhook
-
     now_est = datetime.now(EST)
     
     # Check if it's a weekday (Mon-Fri)
     if now_est.weekday() >= 5:
         return
 
-    # Check if time is 20:00 (8 PM)
-    if not (now_est.hour == 20 and now_est.minute == 0):
+    # Check if time is 20:30 (8:30 PM)
+    if not (now_est.hour == 20 and now_est.minute == 30):
         return
         
-    logger.info(f"📊 [20:00 EST] Running daily 8 PM plot task...")
+    logger.info(f"📊 [20:30 EST] Running daily 8:30 PM report task...")
 
     try:
-        # Generate chart
         loop = asyncio.get_running_loop()
+        
+        # 1. Fetch Latest Market Data Message
+        market_result = await loop.run_in_executor(
+            executor, lambda: get_market_update_message(force=True)
+        )
+        market_msg, _ = market_result
+        
+        # 2. Generate ETF Chart
         chart_path = await loop.run_in_executor(
             executor, lambda: task_daily_main(send_discord=False)
         )
 
+        full_msg = f"**🏁 End of Day Market Report** - {now_est.strftime('%Y-%m-%d %H:%M EST')}\n\n{market_msg}"
+
         if chart_path and os.path.exists(chart_path):
             file_name = "etf_holdings_report.png"
-            content = f"**📊 Daily ETF Holdings Report** - {now_est.strftime('%Y-%m-%d %H:%M EST')}"
 
             # 1. Send to Active Channels
             if active_channels:
@@ -342,20 +360,24 @@ async def daily_plot_task():
                     channel = bot.get_channel(channel_id)
                     if channel:
                         file = discord.File(chart_path, filename=file_name)
-                        # We create a NEW file object for each send because it's a stream
-                        
-                        # Send new message
-                        await channel.send(content=content, file=file)
-                        logger.info(f"✅ Daily plot sent to channel {channel_id}")
+                        await channel.send(content=full_msg, file=file)
+                        logger.info(f"✅ Daily report sent to channel {channel_id}")
             
             # 2. Send to Webhook
-            send_to_webhook(content=content, file_path=chart_path)
+            send_to_webhook(content=full_msg, file_path=chart_path)
             
         else:
-            logger.info("Daily plot generation failed (no file returned)")
+            # Send without chart if chart failed
+            if active_channels:
+                for channel_id in active_channels.keys():
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        await channel.send(content=full_msg)
+            send_to_webhook(content=full_msg)
+            logger.info("Daily report sent without chart (generation failed)")
 
     except Exception as e:
-        logger.error(f"Daily plot task failed: {e}", exc_info=True)
+        logger.error(f"Daily report task failed: {e}", exc_info=True)
 
 
 @daily_plot_task.error
@@ -367,11 +389,28 @@ async def daily_plot_task_error(error):
 @bot.event
 async def on_ready():
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    
+    # Load persisted active channels
+    load_active_channels()
+    
+    # Start tasks automatically
+    if not scheduled_daily_market_task.is_running():
+        scheduled_daily_market_task.start()
+        logger.info("Started scheduled_daily_market_task")
+        
+    if not etf_monitor_task.is_running():
+        etf_monitor_task.start()
+        logger.info("Started etf_monitor_task")
+        
+    if not daily_plot_task.is_running():
+        daily_plot_task.start()
+        logger.info("Started daily_plot_task")
+
     logger.info("=" * 50)
     logger.info("Schedule (EST):")
     logger.info("  • Daily Market Update: Mon-Fri 17:00 (5 PM)")
-    logger.info("  • ETF Monitor: Mon-Fri 17:00-20:00 (Every 5 mins)")
-    logger.info("  • Daily Chart: Mon-Fri 20:00 (8 PM)")
+    logger.info("  • ETF Monitor: Mon-Fri 16:00-21:00 (Every 5 mins)")
+    logger.info("  • Daily Report (Data+Chart): Mon-Fri 20:30 (8:30 PM)")
     logger.info("=" * 50)
     try:
         synced = await bot.tree.sync()
@@ -391,6 +430,7 @@ async def autorun_on(interaction: discord.Interaction):
     # Add channel to active channels
     if channel_id not in active_channels:
         active_channels[channel_id] = {"data_msg_id": None, "plot_msg_id": None}
+        save_active_channels()
 
     tasks_started = []
 
@@ -400,11 +440,11 @@ async def autorun_on(interaction: discord.Interaction):
 
     if not etf_monitor_task.is_running():
         etf_monitor_task.start()
-        tasks_started.append("ETF Monitor (Mon-Fri 17:00-20:00 EST)")
+        tasks_started.append("ETF Monitor (Mon-Fri 16:00-21:00 EST)")
 
     if not daily_plot_task.is_running():
         daily_plot_task.start()
-        tasks_started.append("Daily Chart (Mon-Fri 20:00 EST)")
+        tasks_started.append("Daily Final Report (Mon-Fri 20:30 EST)")
 
     if tasks_started:
         await interaction.response.send_message(
@@ -430,6 +470,7 @@ async def autorun_off(interaction: discord.Interaction):
     
     if channel_id in active_channels:
         del active_channels[channel_id]
+        save_active_channels()
         await interaction.response.send_message(
             f"🛑 This channel removed from automatic updates.\n"
             f"📝 Remaining active channels: {len(active_channels)}",
@@ -469,6 +510,7 @@ async def update_data(interaction: discord.Interaction):
         # Always send NEW message (this becomes the edit target)
         new_msg = await interaction.channel.send(msg)
         active_channels[channel_id]["data_msg_id"] = new_msg.id
+        save_active_channels()
 
         # If ETF data was updated, notify to use /update_plot
         if etf_updated:
@@ -525,6 +567,7 @@ async def update_plot(interaction: discord.Interaction):
             # Always send NEW message (this becomes the edit target)
             new_msg = await interaction.channel.send(content=content, file=file)
             active_channels[channel_id]["plot_msg_id"] = new_msg.id
+            save_active_channels()
 
             await interaction.followup.send(
                 f"✅ Chart sent! Message ID: `{new_msg.id}`\n"
@@ -553,12 +596,12 @@ async def status(interaction: discord.Interaction):
         "",
         f"**Schedule:**",
         f"• Daily Update (17:00): {'🟢 Running' if scheduled_daily_market_task.is_running() else '🔴 Stopped'}",
-        f"• ETF Monitor (17:00-20:00): {'🟢 Running' if etf_monitor_task.is_running() else '🔴 Stopped'}",
-        f"• Daily Chart (20:00): {'🟢 Running' if daily_plot_task.is_running() else '🔴 Stopped'}",
+        f"• ETF Monitor (16:00-21:00): {'🟢 Running' if etf_monitor_task.is_running() else '🔴 Stopped'}",
+        f"• Daily Report (20:30): {'🟢 Running' if daily_plot_task.is_running() else '🔴 Stopped'}",
         "",
-        f"**Current Time Windows:**",
         f"• Market hours (8:00-20:00): {'✅ Active' if is_market_hours() else '❌ Inactive'}",
-        f"• ETF monitor (17:00-20:00): {'✅ Active' if is_etf_monitor_window() else '❌ Inactive'}",
+        f"• ETF monitor (16:00-21:00): {'✅ Active' if is_etf_monitor_window() else '❌ Inactive'}",
+
         "",
         f"**Active Channels:** {len(active_channels)}",
     ]

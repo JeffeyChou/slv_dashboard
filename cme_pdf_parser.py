@@ -111,29 +111,23 @@ class CMEDeliveryParser:
 
                 silver_section = None
                 
-                # Search all pages for SILVER section
                 for page in pdf.pages:
                     text = page.extract_text()
                     
-                    # Find all start indices of "CONTRACT:"
                     contract_starts = [m.start() for m in re.finditer(r"CONTRACT:", text)]
                     
                     for start in contract_starts:
-                        # Extract the contract line to verify if it's SILVER
                         contract_line_end = text.find("\n", start)
                         if contract_line_end == -1:
                             contract_line = text[start:]
                         else:
                             contract_line = text[start:contract_line_end]
                         
-                        # Check if this is the Silver contract
                         if "SILVER FUTURES" in contract_line:
-                            # Try to extract month from contract line (e.g., "FEBRUARY 2026")
                             month_match = re.search(r"(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s+\d{4}", contract_line, re.IGNORECASE)
                             if month_match:
                                 mtd_data["month"] = month_match.group(0).title()
 
-                            # Found it. Now define the end of the section.
                             next_exchange = text.find("EXCHANGE:", contract_line_end)
                             
                             if next_exchange != -1:
@@ -141,7 +135,10 @@ class CMEDeliveryParser:
                             else:
                                 end = len(text)
                             
-                            silver_section = text[start:end]
+                            candidate = text[start:end]
+                            # Skip header-only sections (page boundary split)
+                            if re.search(r"\d{1,2}/\d{1,2}/\d{4}\s+[0-9,]+\s+[0-9,]+", candidate):
+                                silver_section = candidate
                             break
                     
                     if silver_section:
@@ -188,7 +185,7 @@ class CMEDeliveryParser:
 
         try:
             with pdfplumber.open(pdf_bytes) as pdf:
-                # Search all pages for SILVER section
+                # Search all pages for SILVER section with actual data
                 silver_section = None
                 for page in pdf.pages:
                     text = page.extract_text()
@@ -216,7 +213,11 @@ class CMEDeliveryParser:
                             else:
                                 end = len(text)
                             
-                            silver_section = text[start:end]
+                            candidate = text[start:end]
+                            # Verify section has actual date rows, not just header
+                            # (section may split across pages with header on one page, data on next)
+                            if re.search(r"\d{1,2}/\d{1,2}/\d{4}\s+[0-9,]+\s+[0-9,]+", candidate):
+                                silver_section = candidate
                             break
                     
                     if silver_section:

@@ -12,7 +12,7 @@ from datetime import datetime
 from db_manager import DBManager
 from data_fetcher import SilverDataFetcher
 import pandas as pd
-from io import BytesIO
+from io import BytesIO, StringIO
 import pytz
 import sys
 
@@ -263,7 +263,7 @@ def fetch_trump_medallions(db, force=False):
         
         if medallions:
             # Get previous prices to calculate change (from previous day)
-            today_str = datetime.now().strftime("%Y-%m-%d")
+            today_str = get_est_time().strftime("%Y-%m-%d")
             
             if 'silver' in medallions:
                 prev_silver = db.get_last_metric_value_before_date("trump_silver_price", today_str)
@@ -342,7 +342,7 @@ def fetch_slv_holdings(db, force=False):
             etf_updated = False
 
             if latest_slv is None or abs(slv_tonnes - latest_slv) > 0.01:
-                today = datetime.now().strftime("%Y-%m-%d 00:00:00")
+                today = get_est_time().strftime("%Y-%m-%d 00:00:00")
                 db.insert_metric(today, "SLV_Holdings_Tonnes", slv_tonnes)
                 if latest_slv:
                     daily_change = slv_tonnes - latest_slv
@@ -369,9 +369,10 @@ def fetch_gld_holdings(db, force=False):
         return cached, True, False  # data, is_cached, etf_updated
 
     try:
-        url = "https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv"
+        import time
+        url = f"https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv?t={int(time.time())}"
         resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        df = pd.read_csv(pd.io.common.StringIO(resp.text))
+        df = pd.read_csv(StringIO(resp.text))
 
         last = df.iloc[-1]
         tonnes = float(
@@ -401,7 +402,7 @@ def fetch_gld_holdings(db, force=False):
         etf_updated = False
 
         if latest_gld is None or abs(tonnes - latest_gld) > 0.01:
-            today = datetime.now().strftime("%Y-%m-%d 00:00:00")
+            today = get_est_time().strftime("%Y-%m-%d 00:00:00")
             db.insert_metric(today, "GLD_Holdings_Tonnes", tonnes)
             if latest_gld:
                 daily_change = tonnes - latest_gld
@@ -434,6 +435,7 @@ def fetch_comex_inventory(db, force=False):
 
         registered = eligible = None
         delta_reg = delta_elig = None
+        registered_adjustment = eligible_adjustment = 0.0
 
         for _, row in df.iterrows():
             label = str(row.iloc[0]).strip()

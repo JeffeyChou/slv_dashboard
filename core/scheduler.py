@@ -42,6 +42,6 @@ def is_market_hours() -> bool:
 
 
 def is_etf_monitor_window() -> bool:
-    """Check if current time is within ETF monitor window (Mon-Fri 17:00-20:00 EST)."""
+    """Check if current time is within ETF monitor window (Mon-Fri 16:00-21:00 EST)."""
     now_est = datetime.now(EST)
-    return is_weekday() and 17 <= now_est.hour < 20
+    return is_weekday() and 16 <= now_est.hour < 21

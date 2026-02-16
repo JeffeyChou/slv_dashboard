@@ -11,6 +11,9 @@ import sqlite3
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+import pytz
+
+EST = pytz.timezone("America/New_York")
 
 
 class DBManager:
@@ -121,7 +124,7 @@ class DBManager:
         Args:
             data_dict: Dictionary with metric name -> value pairs
         """
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(EST).strftime("%Y-%m-%d %H:%M:%S")
 
         with self._get_conn() as conn:
             for key, value in data_dict.items():
@@ -148,7 +151,7 @@ class DBManager:
                     )
 
             # Cleanup old data (30 day retention)
-            cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+            cutoff = (datetime.now(EST) - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
             conn.execute("DELETE FROM metrics WHERE timestamp < ?", (cutoff,))
 
     def insert_metric(self, timestamp, metric_name, value):
@@ -172,7 +175,7 @@ class DBManager:
         Returns:
             List of dicts: [{'timestamp': '...', 'value': 123.4}, ...]
         """
-        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        cutoff = (datetime.now(EST) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
         with self._get_conn() as conn:
             cursor = conn.execute(
@@ -266,8 +269,13 @@ class DBManager:
             if row:
                 try:
                     data = json.loads(row[0])
+                    # Handle both aware and naive datetimes if necessary
+                    # For simplicity, we'll store everything as ISO with timezone
                     updated_at = datetime.fromisoformat(row[1])
-                    age = datetime.now() - updated_at
+                    if updated_at.tzinfo is None:
+                        updated_at = EST.localize(updated_at)
+                    
+                    age = datetime.now(EST) - updated_at
                     age_hours = age.total_seconds() / 3600
 
                     if age_hours < ttl_hours:
@@ -285,7 +293,7 @@ class DBManager:
                 INSERT OR REPLACE INTO cache (key, data, updated_at)
                 VALUES (?, ?, ?)
             """,
-                (key, json.dumps(data), datetime.now().isoformat()),
+                (key, json.dumps(data), datetime.now(EST).isoformat()),
             )
 
     def clear_cache(self, key=None):

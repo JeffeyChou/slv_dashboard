@@ -218,19 +218,19 @@ class SilverDataFetcher:
             except Exception as e:
                 print(f"⚠ Yahoo Finance {symbol} failed: {e}")
 
-        # 2. Fetch Official OI from CME PDF (Authoritative)
-        cme_code = self._convert_symbol_to_cme_code(symbol) # e.g. MAR26
-        if cme_code:
+        cme_code = self._convert_symbol_to_cme_code(symbol)  # e.g. MAR26
+        if cme_code and not result.get("open_interest"):
             try:
                 parser = CMEDeliveryParser()
-                pdf_data = parser.parse_section62_daily_bulletin(target_contract_code=cme_code)
-                
+                pdf_data = parser.parse_section62_daily_bulletin(
+                    target_contract_code=cme_code
+                )
+
                 if "error" not in pdf_data:
-                    # Overwrite OI and DeltaOI with official data
                     result["open_interest"] = pdf_data["open_interest"]
                     result["delta_oi"] = pdf_data["delta_oi"]
                     result["source"] += " + CME PDF"
-                    
+
                     # If we have no price yet, use PDF price (Close)
                     if not result["price"]:
                         result["price"] = pdf_data["price"]
