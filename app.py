@@ -86,7 +86,7 @@ def create_app():
         result = run_hourly(force=force)
 
         # Optionally send to Discord webhook
-        if result.success and os.getenv("DISCORD_WEBHOOK_URL"):
+        if result.success and (os.getenv("DISCORD_WEBHOOK_URLS") or os.getenv("DISCORD_WEBHOOK_URL")):
             send_to_webhook(result.message)
 
         return jsonify(result.to_dict())
@@ -109,7 +109,7 @@ def create_app():
         result = run_etf_check()
 
         # Send notification if changes detected
-        if result.success and result.etf_updated and os.getenv("DISCORD_WEBHOOK_URL"):
+        if result.success and result.etf_updated and (os.getenv("DISCORD_WEBHOOK_URLS") or os.getenv("DISCORD_WEBHOOK_URL")):
             send_to_webhook(f"🚨 **{result.message}**")
 
         return jsonify(result.to_dict())
@@ -134,15 +134,17 @@ def send_to_webhook(message: str):
     """Send message to Discord webhook."""
     import requests
 
-    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-    if not webhook_url:
+    _raw = os.getenv("DISCORD_WEBHOOK_URLS") or os.getenv("DISCORD_WEBHOOK_URL") or ""
+    urls = [u.strip() for u in _raw.split(",") if u.strip()]
+    if not urls:
         return
 
-    try:
-        requests.post(webhook_url, json={"content": message}, timeout=10)
-        logger.info("Message sent to Discord webhook")
-    except Exception as e:
-        logger.error(f"Failed to send webhook: {e}")
+    for url in urls:
+        try:
+            requests.post(url, json={"content": message}, timeout=10)
+            logger.info("Message sent to Discord webhook")
+        except Exception as e:
+            logger.error(f"Failed to send webhook: {e}")
 
 
 def cli_hourly(args):

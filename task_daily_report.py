@@ -20,7 +20,8 @@ from data_fetcher import SilverDataFetcher
 import pandas as pd
 import numpy as np
 
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+_raw_webhooks = os.getenv("DISCORD_WEBHOOK_URLS") or os.getenv("DISCORD_WEBHOOK_URL") or ""
+WEBHOOK_URLS = [url.strip() for url in _raw_webhooks.split(",") if url.strip()]
 
 
 def get_daily_data(days=30):
@@ -369,21 +370,25 @@ def generate_price_chart(daily_data):
 
 def send_discord_images(*chart_paths):
     """Send charts to Discord"""
-    if not WEBHOOK_URL:
-        print("No webhook URL configured")
+    if not WEBHOOK_URLS:
+        print("No webhook URLs configured")
         return
 
     for i, chart_path in enumerate(chart_paths):
         filename = os.path.basename(chart_path)
-        with open(chart_path, "rb") as f:
-            files = {"file": (filename, f, "image/png")}
-            if i == 0:
-                payload = {
-                    "content": f"**📊 Daily Silver Report** - {datetime.utcnow().strftime('%Y-%m-%d')}"
-                }
-            else:
-                payload = {}
-            requests.post(WEBHOOK_URL, data=payload, files=files)
+        for url in WEBHOOK_URLS:
+            try:
+                with open(chart_path, "rb") as f:
+                    files = {"file": (filename, f, "image/png")}
+                    if i == 0:
+                        payload = {
+                            "content": f"**📊 Daily Silver Report** - {datetime.utcnow().strftime('%Y-%m-%d')}"
+                        }
+                    else:
+                        payload = {}
+                    requests.post(url, data=payload, files=files)
+            except Exception as e:
+                print(f"Failed to send to webhook: {e}")
 
 
 

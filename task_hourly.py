@@ -12,17 +12,38 @@ from datetime import datetime
 from db_manager import DBManager
 from data_fetcher import SilverDataFetcher
 import pandas as pd
-from io import BytesIO, StringIO
+from io import BytesIO
 import pytz
 import sys
 
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+# Support comma-separated list: DISCORD_WEBHOOK_URLS=url1,url2,...
+# Falls back to legacy DISCORD_WEBHOOK_URL if DISCORD_WEBHOOK_URLS is not set
+_raw_webhooks = os.getenv("DISCORD_WEBHOOK_URLS") or os.getenv("DISCORD_WEBHOOK_URL") or ""
+WEBHOOK_URLS = [u.strip() for u in _raw_webhooks.split(",") if u.strip()]
 CACHE_DIR = "cache"
 MSG_ID_FILE = os.path.join(CACHE_DIR, "discord_msg_id.txt")
 
 
 def get_est_time():
     return datetime.now(pytz.timezone("America/New_York"))
+
+
+def get_fetch_stamp():
+    return get_est_time().strftime("%m-%d-%H:%M")
+
+
+def append_fetch_stamp_to_message(msg, stamp):
+    stamped_lines = []
+    for line in msg.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            stamped_lines.append(line)
+            continue
+        if stripped.startswith("────────────────") or stripped.startswith("`*"):
+            stamped_lines.append(line)
+            continue
+        stamped_lines.append(f"{line} [{stamp}]")
+    return "\n".join(stamped_lines)
 
 
 def read_cache(db, name, ttl_hours=24):
@@ -84,72 +105,12 @@ def fetch_xagusd():
         return None
 
 
-def fetch_shanghai_td():
-    """Shanghai Ag T+D"""
-    try:
-        url = "https://www.barchart.com/futures/quotes/XOH26/overview"
-        headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
-        resp = requests.get(url, headers=headers, timeout=15)
-        import re
-
-        data = {}
-        cny_rate = yf.Ticker("CNY=X").history(period="1d")["Close"].iloc[-1]
-
-        price_match = re.search(r'"lastPrice":([0-9,]+)', resp.text)
-        if price_match:
-            price_cny = float(price_match.group(1).replace(",", ""))
-            data["price_cny_kg"] = price_cny
-            data["price_usd_oz"] = round((price_cny / cny_rate) / 32.1507, 2)
-
-        pct_match = re.search(r'"percentChange":(-?[0-9.]+)', resp.text)
-        if pct_match:
-            data["change_pct"] = round(float(pct_match.group(1)) * 100, 2)
-
-        raw = re.search(
-            r"&quot;raw&quot;:\{[^}]*&quot;volume&quot;:([0-9]+)[^}]*&quot;openInterest&quot;:([0-9]+)",
-            resp.text,
-        )
-        if raw:
-            data["volume"] = int(raw.group(1))
-            data["oi"] = int(raw.group(2))
-
-        data["cny_rate"] = round(cny_rate, 4)
-        return data if data else None
-    except Exception as e:
-        print(f"⚠ SHFE failed: {e}")
-        return None
+# DISABLED: XOH26 (SHFE) future price & OI tracking removed
+# def fetch_shanghai_td(): ...
 
 
-def fetch_comex_futures():
-    """COMEX silver futures - Try Barchart first, then YF"""
-    # 1. Try Barchart (via SilverDataFetcher)
-    try:
-        fetcher = SilverDataFetcher()
-        data = fetcher.get_futures_data()
-        if data and data.get("price"):
-            return {
-                "price": data["price"],
-                "volume": data.get("volume", 0),
-                "oi": data.get("open_interest", 0),
-                "prev_close": data.get("previous_close"),
-                "delta_oi": data.get("delta_oi"),
-            }
-    except Exception as e:
-        print(f"⚠ Barchart COMEX failed: {e}")
-
-    # 2. Fallback to Yahoo Finance
-    try:
-        si = yf.Ticker("SI=F")
-        si.session.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        info = si.info
-        return {
-            "price": info.get("regularMarketPrice"),
-            "volume": info.get("volume", 0),
-            "oi": info.get("openInterest", 0),
-            "prev_close": info.get("previousClose"),
-        }
-    except:
-        return None
+# DISABLED: SIH26 (COMEX) future price & OI tracking removed
+# def fetch_comex_futures(): ...
 
 
 def fetch_slv_price():
@@ -369,18 +330,36 @@ def fetch_gld_holdings(db, force=False):
         return cached, True, False  # data, is_cached, etf_updated
 
     try:
-        import time
-        url = f"https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv?t={int(time.time())}"
-        resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        df = pd.read_csv(StringIO(resp.text))
+        import re
 
-        last = df.iloc[-1]
-        tonnes = float(
-            last[" Total Net Asset Value Tonnes in the Trust as at 4.15 p.m. NYT"]
+        url = "https://api.spdrgoldshares.com/api/v1/data"
+        params = {"product": "gld", "exchange": "nyse", "lang": "en"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+            "Accept": "application/json",
+        }
+        resp = requests.get(url, params=params, timeout=20, headers=headers)
+        resp.raise_for_status()
+
+        data_json = resp.json().get("data", {})
+
+        def parse_number(value):
+            if value is None:
+                return None
+            cleaned = re.sub(r"[^0-9.,-]", "", str(value)).replace(",", "")
+            return float(cleaned) if cleaned else None
+
+        tonnes = parse_number(data_json.get("total_tonnes", {}).get("value"))
+        ounces = parse_number(data_json.get("total_ounces", {}).get("value"))
+        nav_usd = parse_number(data_json.get("total_nav_usd", {}).get("value"))
+        as_of_date = (
+            data_json.get("total_nav_usd", {}).get("date")
+            or data_json.get("total_ounces", {}).get("date")
+            or data_json.get("total_tonnes", {}).get("date")
         )
-        ounces = float(
-            last[" Total Net Asset Value Ounces in the Trust as at 4.15 p.m. NYT"]
-        )
+
+        if tonnes is None or ounces is None:
+            raise ValueError("Missing total_tonnes or total_ounces in GLD overview API")
 
         # Get last different value from database
         prev_tonnes = db.get_last_different_value(
@@ -392,6 +371,8 @@ def fetch_gld_holdings(db, force=False):
             "holdings_tonnes": tonnes,
             "holdings_oz": ounces,
             "change_tonnes": change_tonnes,
+            "total_nav_usd": nav_usd,
+            "as_of_date": as_of_date,
             "ts": datetime.now().isoformat(),
         }
         write_cache(db, "gld_holdings", data)
@@ -472,49 +453,199 @@ def fetch_comex_inventory(db, force=False):
 
 
 def send_discord(msg):
-    if not WEBHOOK_URL:
-        print("⚠ No Discord webhook URL configured")
+    if not WEBHOOK_URLS:
+        print("⚠ No Discord webhook URL(s) configured")
         return
 
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-    # Try to edit existing message
-    message_sent = False
-    if os.path.exists(MSG_ID_FILE):
-        with open(MSG_ID_FILE) as f:
-            msg_id = f.read().strip()
-        if msg_id:
-            edit_url = f"{WEBHOOK_URL}/messages/{msg_id}"
-            try:
-                resp = requests.patch(edit_url, json={"content": msg}, timeout=10)
-                if resp.status_code == 200:
-                    print(f"✓ Discord message updated (ID: {msg_id})")
-                    return
-                else:
-                    print(
-                        f"⚠ Failed to edit message (status {resp.status_code}), sending new one"
-                    )
-            except Exception as e:
-                print(f"⚠ Error editing message: {e}, sending new one")
+    for idx, webhook_url in enumerate(WEBHOOK_URLS):
+        # Each webhook gets its own message-ID cache file
+        id_file = MSG_ID_FILE if idx == 0 else f"{MSG_ID_FILE}.{idx}"
+        label = f"webhook[{idx}]"
 
-    # Send new message and save ID
-    try:
-        resp = requests.post(
-            f"{WEBHOOK_URL}?wait=true", json={"content": msg}, timeout=10
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            msg_id = data.get("id", "")
+        # Try to edit existing message for this webhook
+        if os.path.exists(id_file):
+            with open(id_file) as f:
+                msg_id = f.read().strip()
             if msg_id:
-                with open(MSG_ID_FILE, "w") as f:
-                    f.write(msg_id)
-                print(f"✓ New Discord message sent (ID: {msg_id})")
+                edit_url = f"{webhook_url}/messages/{msg_id}"
+                try:
+                    resp = requests.patch(edit_url, json={"content": msg}, timeout=10)
+                    if resp.status_code == 200:
+                        print(f"✓ Discord {label} updated (ID: {msg_id})")
+                        continue
+                    else:
+                        print(f"⚠ {label}: edit failed ({resp.status_code}), sending new")
+                except Exception as e:
+                    print(f"⚠ {label}: edit error: {e}, sending new")
+
+        # Send new message and save its ID
+        try:
+            resp = requests.post(
+                f"{webhook_url}?wait=true", json={"content": msg}, timeout=10
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                msg_id = data.get("id", "")
+                if msg_id:
+                    with open(id_file, "w") as f:
+                        f.write(msg_id)
+                    print(f"✓ {label} new message sent (ID: {msg_id})")
+                else:
+                    print(f"✓ {label} message sent (no ID returned)")
             else:
-                print("✓ Discord message sent (no ID returned)")
-        else:
-            print(f"⚠ Failed to send Discord message (status {resp.status_code})")
+                print(f"⚠ {label}: send failed (status {resp.status_code})")
+        except Exception as e:
+            print(f"⚠ {label}: send error: {e}")
+
+def fetch_wti_brent_spread():
+    """Fetch WTI (CL=F) and Brent (BZ=F) prices and compute spread.
+    Spread narrowing = potential short signal for crude."""
+    try:
+        wti = yf.Ticker("CL=F")
+        brent = yf.Ticker("BZ=F")
+        wti_price = wti.history(period="2d")["Close"].iloc[-1]
+        brent_price = brent.history(period="2d")["Close"].iloc[-1]
+        spread = round(wti_price - brent_price, 2)  # normally negative (Brent > WTI)
+        return {
+            "wti": round(float(wti_price), 2),
+            "brent": round(float(brent_price), 2),
+            "spread": spread,  # WTI - Brent
+        }
     except Exception as e:
-        print(f"⚠ Error sending Discord message: {e}")
+        print(f"⚠ WTI-Brent spread failed: {e}")
+        return None
+
+
+def fetch_fedwatch_probability():
+    """Live Fed Funds Futures implied EFFR from ZQ=F (front-month).
+    ZQ price = 100 - avg(EFFR for current month).
+    Used as a directional indicator for rate expectations.
+    Note: CME FedWatch exact cut/hold/hike % requires paid API.
+    """
+    try:
+        zq = yf.Ticker("ZQ=F")
+        hist = zq.history(period="5d")
+        if not hist.empty:
+            price = float(hist["Close"].iloc[-1])
+            implied_rate = round(100.0 - price, 4)
+            return {
+                "probability": None,          # exact cut prob needs CME paid API
+                "implied_rate": implied_rate,  # e.g. 3.695%
+                "futures_price": round(price, 4),
+                "source": "ZQ=F (yfinance)",
+            }
+    except Exception as e:
+        print(f"  ZQ=F fetch failed: {e}")
+    return None
+
+
+FEDWATCH_ALERT_LOW = 35.0
+FEDWATCH_ALERT_HIGH = 55.0
+
+
+def fetch_polymarket_ceasefire():
+    """Fetch ceasefire / Hormuz probability from Polymarket API.
+    Tracks three time windows:
+    - Short-term: ceasefire before end of April
+    - Q2: ceasefire before end of June
+    - Long-term: general Hormuz reopening / end of conflict
+    Returns dict with probabilities (0-100).
+    """
+    import re
+
+    MARKETS = [
+        # Verified live slugs as of 2026-03-26 (browser-confirmed)
+        {
+            "key": "ceasefire_june",
+            "label": "Israel-Hamas Ceasefire Phase II <= Jun 30",
+            "slug": "israel-x-hamas-ceasefire-phase-ii-by-june-30",
+            "keyword": "ceasefire june",
+        },
+        {
+            "key": "hormuz_normal",
+            "label": "Hormuz Traffic Normal by Apr 30",
+            "slug": "strait-of-hormuz-traffic-returns-to-normal-by-april-30",
+            "keyword": "hormuz normal",
+        },
+    ]
+
+    results = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "Accept": "application/json",
+    }
+
+    def _extract_prob(market):
+        prices_raw = market.get("outcomePrices")
+        if not prices_raw:
+            return None
+        try:
+            prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+            return round(float(prices[0]) * 100, 1)
+        except Exception:
+            return None
+
+    def _search_keyword(keyword):
+        """Fallback: search Polymarket events by keyword."""
+        try:
+            from urllib.parse import quote
+            url = f"https://gamma-api.polymarket.com/events?title={quote(keyword)}&closed=false&limit=5"
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                events = resp.json()
+                if isinstance(events, list):
+                    kw_lower = keyword.lower()
+                    for ev in events:
+                        title = (ev.get("title") or "").lower()
+                        if any(w in title for w in kw_lower.split()):
+                            mkt_list = ev.get("markets", [])
+                            if mkt_list:
+                                return mkt_list[0], ev.get("title", keyword)
+        except Exception as e:
+            print(f"  Polymarket keyword search '{keyword}': {e}")
+        return None, None
+
+    for mkt in MARKETS:
+        try:
+            market_data = None
+            question = mkt["label"]
+
+            # 1. Try exact slug
+            url = f"https://gamma-api.polymarket.com/markets?slug={mkt['slug']}"
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    candidate = data[0]
+                    if _extract_prob(candidate) is not None:
+                        market_data = candidate
+                        question = candidate.get("question", mkt["label"])
+
+            # 2. Fallback: keyword search via events endpoint
+            if not market_data:
+                market_data, ev_title = _search_keyword(mkt.get("keyword", mkt["key"]))
+                if ev_title:
+                    question = ev_title
+
+            if market_data:
+                yes_prob = _extract_prob(market_data)
+                if yes_prob is not None:
+                    results[mkt["key"]] = {
+                        "label": mkt["label"],
+                        "probability": yes_prob,
+                        "question": question,
+                    }
+                    print(f"\u2713 Polymarket {mkt['key']}: {yes_prob}% ({question[:60]})")
+                else:
+                    print(f"\u26a0 Polymarket {mkt['key']}: no outcomePrices")
+            else:
+                print(f"\u26a0 Polymarket {mkt['key']}: no data found")
+        except Exception as e:
+            print(f"\u26a0 Polymarket {mkt['key']} failed: {e}")
+
+    return results if results else None
 
 
 def get_market_update_message(force=False):
@@ -524,68 +655,40 @@ def get_market_update_message(force=False):
     # === REAL-TIME DATA ===
     print("\n=== Real-time Data ===")
     xagusd = fetch_xagusd()
-    shfe = fetch_shanghai_td()
-    comex = fetch_comex_futures()
     slv = fetch_slv_price()
     gld = fetch_gld_price()
     gold_spot = fetch_gold_spot()
+    # SIH26 (COMEX futures) and XOH26 (SHFE futures) disabled
+    comex = None
+    shfe = None
+
+    # === NEW ALPHA FACTORS ===
+    print("\n=== Alpha Factors ===")
+    wti_brent = fetch_wti_brent_spread()
+    fedwatch = fetch_fedwatch_probability()
+    polymarket = fetch_polymarket_ceasefire()
+    if wti_brent:
+        print(f"✓ WTI: ${wti_brent['wti']} | Brent: ${wti_brent['brent']} | Spread: ${wti_brent['spread']}")
+    if fedwatch:
+        print(f"✓ FedWatch cut prob: {fedwatch['probability']}% [{fedwatch['source']}]")
+    if polymarket:
+        for k, v in polymarket.items():
+            print(f"✓ Polymarket {k}: {v['probability']}%")
 
     # === GET ADDITIONAL DATA FROM MAIN FETCHER ===
-    print("\n=== Fetching OI deltas and delivery data ===")
+    print("\n=== Fetching delivery data ===")
     try:
         fetcher = SilverDataFetcher()
-
-        # Get futures data with OI delta
-        futures_data = fetcher.get_futures_data()
-        if futures_data and not futures_data.get("error"):
-            if comex:
-                comex["delta_oi"] = futures_data.get("delta_oi")
-                print(f"✓ COMEX OI Delta: {comex.get('delta_oi')}")
-
-        # Get SHFE data with OI delta - use the barchart data, not JSON file
-        shfe_data = fetcher.get_shfe_data()
-        if shfe_data and shfe_data.get("status") == "Success":
-            if shfe:
-                # Use the live barchart data but get delta from database
-                shfe["delta_oi"] = shfe_data.get("delta_oi")
-                print(f"✓ SHFE OI Delta: {shfe.get('delta_oi')}")
-            else:
-                # If no SHFE data from hourly fetch, use the main fetcher data
-                shfe = {
-                    "price_usd_oz": round(
-                        (shfe_data.get("price", 0) / 6.96) / 32.1507, 2
-                    )
-                    if shfe_data.get("price")
-                    else None,
-                    "price_cny_kg": shfe_data.get("price"),
-                    "volume": shfe_data.get("volume"),
-                    "oi": shfe_data.get("oi"),
-                    "delta_oi": shfe_data.get("delta_oi"),
-                    "change_pct": 0,  # Default since we don't have this from main fetcher
-                }
-        else:
-            # Fallback: if main fetcher fails, keep the barchart data but no delta
-            if shfe:
-                shfe["delta_oi"] = None
-                print("⚠ SHFE OI Delta: Not available (main fetcher failed)")
-
-        # Get 3-day delivery data
+        # Get 3-day delivery data (still active)
         delivery_3days = fetcher.pdf_parser.parse_last_3_days_silver()
         print(f"✓ 3-day delivery data: {delivery_3days.get('found', False)}")
-
     except Exception as e:
-        print(f"⚠ Error fetching additional data: {e}")
+        print(f"⚠ Error fetching delivery data: {e}")
         delivery_3days = {"error": str(e)}
 
     if xagusd:
         db.insert("XAGUSD", price=xagusd)
         print(f"✓ XAG/USD: ${xagusd}")
-    if comex:
-        db.insert("COMEX", price=comex["price"], raw_data=json.dumps(comex))
-        print(f"✓ COMEX: ${comex['price']}")
-    if shfe:
-        db.insert("SHFE", raw_data=json.dumps(shfe))
-        print(f"✓ SHFE: ${shfe.get('price_usd_oz')}/oz")
     if slv:
         db.insert("SLV", price=slv["price"], raw_data=json.dumps(slv))
         print(f"✓ SLV: ${slv['price']}")
@@ -595,6 +698,9 @@ def get_market_update_message(force=False):
     if gold_spot:
         db.insert("GOLD_SPOT", price=gold_spot)
         print(f"✓ Gold Spot: ${gold_spot}")
+    if wti_brent:
+        db.insert("WTI_BRENT_SPREAD", price=wti_brent["spread"], raw_data=json.dumps(wti_brent))
+        print(f"✓ WTI-Brent spread stored")
 
     # === DAILY DATA (24h cache) ===
     print("\n=== Daily Data (24h cache) ===")
@@ -627,49 +733,49 @@ def get_market_update_message(force=False):
 
     msg = f"**📊 Silver Market Update** - {ts}\n\n"
 
-    # Spot & Futures (30min)
+    # Spot Prices
     msg += "**💹 Real-time Prices**\n"
     if xagusd:
         msg += f"• XAG/USD Spot: **${xagusd:.2f}**/oz\n"
     if gold_spot:
         msg += f"• XAU/USD Spot: **${gold_spot:.2f}**/oz\n"
-    if comex:
-        price_val = comex['price']
-        prev_close = comex.get('previous_close')
-        change_str = ""
-        if prev_close:
-            diff = price_val - prev_close
-            pct = (diff / prev_close) * 100
-            arrow = "🔺" if diff > 0 else "🔻" if diff < 0 else "➡️"
-            change_str = f" {arrow}${abs(diff):.2f} ({pct:+.2f}%)"
-            
-        msg += f"• COMEX (SIH26): **${price_val:.2f}**/oz{change_str}\n"
-        if comex.get("oi"):
-            msg += f"  └ OI: {comex['oi']:,}"
-            if comex.get("delta_oi") is not None:
-                msg += f" (ΔOI: {comex['delta_oi']:+,.0f})"
-            msg += "\n"
-            msg += f"  └ Physical equiv: {(comex['oi'] * 5000 / 32150.7):,.2f}t\n"
-    if shfe:
-        msg += f"• SHFE Ag (XOH26): **${shfe.get('price_usd_oz')}**/oz (¥{shfe.get('price_cny_kg', 0):,.0f}/kg)"
-        if shfe.get("change_pct") is not None:
-            msg += f" {shfe['change_pct']:+.2f}%"
-        msg += "\n"
-        if shfe.get("oi"):
-            msg += f"  └ OI: {shfe['oi']:,}"
-            if shfe.get("delta_oi") is not None:
-                msg += f" (ΔOI: {shfe['delta_oi']:+,.0f})"
-            msg += "\n"
-            msg += f"  └ Physical equiv: {(shfe['oi'] * 15 / 1000):,.2f}t\n"
-        if xagusd and shfe.get("price_usd_oz"):
-            premium = shfe["price_usd_oz"] - xagusd
-            msg += f"  └ Shanghai Premium: **${premium:+.2f}**\n"
     if slv:
         arrow = "🔺" if slv["change_pct"] > 0 else "🔻"
         msg += f"• SLV ETF: **${slv['price']:.2f}** {arrow}{slv['change_pct']:+.2f}%\n"
     if gld:
         arrow = "🔺" if gld["change_pct"] > 0 else "🔻"
         msg += f"• GLD ETF: **${gld['price']:.2f}** {arrow}{gld['change_pct']:+.2f}%\n"
+
+    # ── Alpha Factor 2: WTI-Brent Spread ──
+    if wti_brent:
+        spread = wti_brent["spread"]
+        spread_signal = ""
+        # Spread narrows (becomes less negative) → potential short signal
+        if spread > -2.0:
+            spread_signal = " 🚨 *Narrow spread – potential crude short signal*"
+        elif spread > -4.0:
+            spread_signal = " ⚠️ *Spread tightening*"
+        msg += f"\n**🛢️ Crude Oil Spread** (War Inflection Gauge)\n"
+        msg += f"• WTI: **${wti_brent['wti']:.2f}** │ Brent: **${wti_brent['brent']:.2f}**\n"
+        msg += f"• WTI–Brent Spread: **${spread:+.2f}**{spread_signal}\n"
+
+    # ── Alpha Factor 3: CME FedWatch (ZQ=F indicator) ──
+    if fedwatch:
+        implied = fedwatch.get("implied_rate")
+        price = fedwatch.get("futures_price")
+        if implied is not None:
+            msg += f"\n**\U0001f3e6 Fed Funds Futures** `ZQ=F` — implied EFFR: **{implied:.3f}%** (futures: {price:.4f})\n"
+            msg += f"\u2022 *Directional indicator only — exact cut/hold/hike % from [CME FedWatch](https://www.cmegroup.com/markets/interest-rates/cme-fedwatch-tool.html)*\n"
+
+    # ── Alpha Factor 1: Geopolitical Risk (Ceasefire / Hormuz) ──
+    if polymarket:
+        msg += f"\n**\U0001f54a\ufe0f Geopolitical Risk** (Polymarket Probabilities)\n"
+        june = polymarket.get("ceasefire_june")
+        hormuz = polymarket.get("hormuz_normal")
+        if june:
+            msg += f"\u2022 Israel-Hamas Phase II Ceasefire \u2264 Jun 30: **{june['probability']:.1f}%**\n"
+        if hormuz:
+            msg += f"\u2022 Hormuz Traffic Normal by Apr 30: **{hormuz['probability']:.1f}%** (blockade risk: {round(100-hormuz['probability'],1):.1f}%)\n"
 
     # Daily data - Physical Holdings (format: tonnes first, then oz)
     msg += f"\n**📦 Physical Holdings** `[Daily{'*' if not force else ' ✓'}]`\n"
@@ -771,20 +877,11 @@ def get_market_update_message(force=False):
             for day in delivery_data["data"]:
                 msg += f"• {day['intent_date']}: **{day['daily_total']:,}** daily, **{day['total_cumulative']:,}** cumulative\n"
 
-    # Metrics
-    if comex and comex_inv and comex_inv.get("registered"):
-        oi = comex.get("oi", 0)
-        if oi:
-            paper_oz = oi * 5000
-            ratio = round(paper_oz / comex_inv["registered"], 2)
-            msg += "\n**📈 Key Metrics**\n"
-            msg += f"• Paper/Physical: **{ratio}x**\n"
-            if xagusd and comex:
-                basis = round(comex["price"] - xagusd, 3)
-                msg += f"• Futures Basis: **${basis:+.3f}**\n"
-
     msg += "\n─────────────────────────────\n"
-    msg += "`*` cached (24h) │ `Paper/Physical` = (OI×5000oz) / Registered │ `Basis` = Futures - Spot"
+    msg += "`*` cached (24h) │ `WTI–Brent` narrowing = potential crude short │ `FedWatch` alert: 35–55%"
+
+    fetch_stamp = get_fetch_stamp()
+    msg = append_fetch_stamp_to_message(msg, fetch_stamp)
 
     return msg, etf_updated
 

@@ -22,6 +22,7 @@ from datetime import datetime
 import pytz
 import logging
 import requests
+import re
 
 # Setup logging
 logging.basicConfig(
@@ -96,6 +97,23 @@ active_channels = {}
 EST = pytz.timezone("America/New_York")
 
 
+def append_fetch_stamp_to_copy(content):
+    if not content:
+        return content
+
+    stamp = datetime.now(EST).strftime("%m-%d-%H:%M")
+    stamped_lines = []
+    pattern = re.compile(r"\[\d{2}-\d{2}-\d{2}:\d{2}\]$")
+
+    for line in content.splitlines():
+        if not line.strip() or pattern.search(line):
+            stamped_lines.append(line)
+            continue
+        stamped_lines.append(f"{line} [{stamp}]")
+
+    return "\n".join(stamped_lines)
+
+
 # Global error handler
 @bot.event
 async def on_error(event, *args, **kwargs):
@@ -168,31 +186,31 @@ async def send_or_edit_message(channel, content, message_id=None, file=None):
         return None
 
 def send_to_webhook(content=None, file_path=None):
-    """Send message/file to the configured Discord Webhook URL."""
-    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-    if not webhook_url:
+    """Send message/file to the configured Discord Webhook URLs."""
+    _raw = os.getenv("DISCORD_WEBHOOK_URLS") or os.getenv("DISCORD_WEBHOOK_URL") or ""
+    urls = [u.strip() for u in _raw.split(",") if u.strip()]
+    if not urls:
         return
     
-    try:
-        data = {}
-        if content:
-            data["content"] = content
-        
-        if file_path and os.path.exists(file_path):
-            with open(file_path, "rb") as f:
-                files = {"file": (os.path.basename(file_path), f)}
-                if content:
-                    # When sending file, content needs to be payload_json if complex, 
-                    # or just data field if simple. requests handles 'data' fine with 'files'.
-                    requests.post(webhook_url, data=data, files=files, timeout=30)
-                else:
-                    requests.post(webhook_url, files=files, timeout=30)
-        else:
-            requests.post(webhook_url, json=data, timeout=10)
+    for url in urls:
+        try:
+            data = {}
+            if content:
+                data["content"] = append_fetch_stamp_to_copy(content)
             
-        logger.info("Message sent to Webhook")
-    except Exception as e:
-        logger.error(f"Failed to send to webhook: {e}")
+            if file_path and os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    files = {"file": (os.path.basename(file_path), f)}
+                    if content:
+                        requests.post(url, data=data, files=files, timeout=30)
+                    else:
+                        requests.post(url, files=files, timeout=30)
+            else:
+                requests.post(url, json=data, timeout=10)
+                
+            logger.info("Message sent to Webhook")
+        except Exception as e:
+            logger.error(f"Failed to send to webhook: {e}")
 
 @tasks.loop(minutes=1)
 async def scheduled_daily_market_task():
@@ -269,29 +287,44 @@ async def etf_monitor_task():
         )
         slv_updated, gld_updated, slv_data, gld_data = result
 
+        # Filter: Only send notifications within ETF monitor window (16:00-21:00 EST)
+        if not (now_est.weekday() < 5 and 16 <= now_est.hour < 21):
+            logger.info(f"   Skipping notification - outside ETF monitor window ({now_est.strftime('%H:%M EST')})")
+            return
+
         if slv_updated or gld_updated:
             # Build notification message
             changes = []
             oz_to_tonnes = 1 / 32150.7
 
-            if slv_updated and slv_data:
+            if slv_updated and slv_data and slv_data.get("holdings_oz"):
                 slv_tonnes = slv_data["holdings_oz"] * oz_to_tonnes
                 change_oz = slv_data.get("change", 0)
                 change_t = change_oz * oz_to_tonnes
-                changes.append(
-                    f"• SLV: **{slv_tonnes:,.2f}** tonnes ({change_t:+.2f}t)"
-                )
+                # Filter: Skip tiny changes (< 0.1 tonnes) as noise
+                if abs(change_t) >= 0.1 or abs(slv_tonnes) > 0:
+                    changes.append(
+                        f"• SLV: **{slv_tonnes:,.2f}** tonnes ({change_t:+.2f}t)"
+                    )
 
-            if gld_updated and gld_data:
+            if gld_updated and gld_data and gld_data.get("holdings_tonnes"):
                 gld_tonnes = gld_data["holdings_tonnes"]
                 change_t = gld_data.get("change_tonnes", 0)
-                changes.append(
-                    f"• GLD: **{gld_tonnes:,.2f}** tonnes ({change_t:+.2f}t)"
-                )
+                # Filter: Skip tiny changes (< 0.1 tonnes) as noise
+                if abs(change_t) >= 0.1 or abs(gld_tonnes) > 0:
+                    changes.append(
+                        f"• GLD: **{gld_tonnes:,.2f}** tonnes ({change_t:+.2f}t)"
+                    )
+
+            # Filter: Skip if no actual data changes (blank update)
+            if not changes:
+                logger.info("   Skipping blank ETF update - no valid data changes")
+                return
 
             msg = f"🚨 **ETF Holdings Update Detected!** - {now_est.strftime('%H:%M EST')}\n\n"
             msg += "\n".join(changes)
             msg += "\n\n📊 Use `/update_plot` to refresh the chart."
+            msg = append_fetch_stamp_to_copy(msg)
 
             # Send to all active channels
             for channel_id in active_channels.keys():
@@ -350,6 +383,7 @@ async def daily_plot_task():
         )
 
         full_msg = f"**🏁 End of Day Market Report** - {now_est.strftime('%Y-%m-%d %H:%M EST')}\n\n{market_msg}"
+        full_msg = append_fetch_stamp_to_copy(full_msg)
 
         if chart_path and os.path.exists(chart_path):
             file_name = "etf_holdings_report.png"
@@ -563,6 +597,7 @@ async def update_plot(interaction: discord.Interaction):
             content = (
                 f"**📊 ETF Holdings Report** - {now_est.strftime('%Y-%m-%d %H:%M EST')}"
             )
+            content = append_fetch_stamp_to_copy(content)
 
             # Always send NEW message (this becomes the edit target)
             new_msg = await interaction.channel.send(content=content, file=file)
@@ -697,8 +732,9 @@ async def recall_plot(interaction: discord.Interaction):
 )
 async def send_to_webhook_data(interaction: discord.Interaction):
     """Force update data and send to the external Webhook URL"""
-    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-    if not webhook_url:
+    _raw = os.getenv("DISCORD_WEBHOOK_URLS") or os.getenv("DISCORD_WEBHOOK_URL") or ""
+    urls = [u.strip() for u in _raw.split(",") if u.strip()]
+    if not urls:
         await interaction.response.send_message(
             "❌ Webhook URL not configured in .env", ephemeral=True
         )
@@ -715,19 +751,24 @@ async def send_to_webhook_data(interaction: discord.Interaction):
             executor, lambda: get_market_update_message(force=True)
         )
         msg, _ = result
+        msg = append_fetch_stamp_to_copy(msg)
 
         # Send to Webhook
         def _send():
-            resp = requests.post(webhook_url, json={"content": msg}, timeout=10)
-            return resp.status_code
+            success = True
+            for url in urls:
+                resp = requests.post(url, json={"content": msg}, timeout=10)
+                if resp.status_code not in [200, 204]:
+                    success = False
+            return success
 
-        status_code = await loop.run_in_executor(executor, _send)
+        is_success = await loop.run_in_executor(executor, _send)
 
-        if status_code in [200, 204]:
+        if is_success:
             await interaction.followup.send("✅ Data sent to Webhook successfully!", ephemeral=True)
         else:
             await interaction.followup.send(
-                f"⚠️ Webhook returned status {status_code}", ephemeral=True
+                f"⚠️ One or more Webhook sends failed", ephemeral=True
             )
 
     except Exception as e:
@@ -742,8 +783,9 @@ async def send_to_webhook_data(interaction: discord.Interaction):
 )
 async def send_to_webhook_chart(interaction: discord.Interaction):
     """Generate chart and send to the external Webhook URL"""
-    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-    if not webhook_url:
+    _raw = os.getenv("DISCORD_WEBHOOK_URLS") or os.getenv("DISCORD_WEBHOOK_URL") or ""
+    urls = [u.strip() for u in _raw.split(",") if u.strip()]
+    if not urls:
         await interaction.response.send_message(
             "❌ Webhook URL not configured in .env", ephemeral=True
         )
@@ -763,21 +805,26 @@ async def send_to_webhook_chart(interaction: discord.Interaction):
         if chart_path and os.path.exists(chart_path):
             # Send to Webhook with file
             def _send():
-                with open(chart_path, "rb") as f:
-                    now_est = datetime.now(EST)
-                    content = f"**📊 Daily ETF Holdings Report** - {now_est.strftime('%Y-%m-%d %H:%M EST')}"
-                    files = {"file": ("etf_holdings_report.png", f)}
-                    data = {"content": content}
-                    resp = requests.post(webhook_url, data=data, files=files, timeout=30)
-                return resp.status_code
+                success = True
+                for url in urls:
+                    with open(chart_path, "rb") as f:
+                        now_est = datetime.now(EST)
+                        content = f"**📊 Daily ETF Holdings Report** - {now_est.strftime('%Y-%m-%d %H:%M EST')}"
+                        content = append_fetch_stamp_to_copy(content)
+                        files = {"file": ("etf_holdings_report.png", f)}
+                        data = {"content": content}
+                        resp = requests.post(url, data=data, files=files, timeout=30)
+                        if resp.status_code not in [200, 204]:
+                            success = False
+                return success
 
-            status_code = await loop.run_in_executor(executor, _send)
+            is_success = await loop.run_in_executor(executor, _send)
 
-            if status_code in [200, 204]:
+            if is_success:
                 await interaction.followup.send("✅ Chart sent to Webhook successfully!", ephemeral=True)
             else:
                 await interaction.followup.send(
-                    f"⚠️ Webhook returned status {status_code}", ephemeral=True
+                    f"⚠️ One or more Webhook sends failed", ephemeral=True
                 )
         else:
             await interaction.followup.send(
