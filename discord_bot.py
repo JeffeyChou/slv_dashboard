@@ -71,6 +71,7 @@ from task_hourly import (
 )
 from task_daily_report import main as task_daily_main
 from db_manager import DBManager
+from rednote_monitor import RednoteMonitor
 
 # Load environment variables
 load_dotenv()
@@ -150,6 +151,37 @@ def check_etf_changes():
     gld_data, _, gld_updated = fetch_gld_holdings(db, force=True)
 
     return slv_updated, gld_updated, slv_data, gld_data
+
+
+@tasks.loop(minutes=15)
+async def rednote_monitor_task():
+    """
+    Monitor Rednote accounts for new posts.
+    Runs every 15 minutes.
+    """
+    cookie = os.getenv("REDNOTE_COOKIE")
+    user_ids_raw = os.getenv("REDNOTE_MONITOR_ID_LISTS", "")
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URLS", "").split(",")[0]
+    
+    if not cookie or not user_ids_raw:
+        logger.warning("Rednote monitor skipped: REDNOTE_COOKIE or REDNOTE_MONITOR_ID_LISTS not set.")
+        return
+
+    logger.info("🏮 Running scheduled Rednote scan...")
+    try:
+        user_ids = [uid.strip() for uid in user_ids_raw.split(",") if uid.strip()]
+        monitor = RednoteMonitor(cookie, user_ids, webhook_url)
+        
+        # Run in executor because it's synchronous HTTP scraping
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(executor, monitor.scan_all)
+    except Exception as e:
+        logger.error(f"Rednote monitor task failed: {e}", exc_info=True)
+
+
+@rednote_monitor_task.error
+async def rednote_monitor_task_error(error):
+    logger.error(f"Critical error in Rednote monitor task: {error}", exc_info=True)
 
 
 async def send_or_edit_message(channel, content, message_id=None, file=None):
@@ -440,11 +472,16 @@ async def on_ready():
         daily_plot_task.start()
         logger.info("Started daily_plot_task")
 
+    if not rednote_monitor_task.is_running():
+        rednote_monitor_task.start()
+        logger.info("Started rednote_monitor_task")
+
     logger.info("=" * 50)
     logger.info("Schedule (EST):")
     logger.info("  • Daily Market Update: Mon-Fri 17:00 (5 PM)")
     logger.info("  • ETF Monitor: Mon-Fri 16:00-21:00 (Every 5 mins)")
     logger.info("  • Daily Report (Data+Chart): Mon-Fri 20:30 (8:30 PM)")
+    logger.info("  • Rednote Monitor: Every 15 mins")
     logger.info("=" * 50)
     try:
         synced = await bot.tree.sync()
@@ -633,6 +670,7 @@ async def status(interaction: discord.Interaction):
         f"• Daily Update (17:00): {'🟢 Running' if scheduled_daily_market_task.is_running() else '🔴 Stopped'}",
         f"• ETF Monitor (16:00-21:00): {'🟢 Running' if etf_monitor_task.is_running() else '🔴 Stopped'}",
         f"• Daily Report (20:30): {'🟢 Running' if daily_plot_task.is_running() else '🔴 Stopped'}",
+        f"• Rednote Monitor: {'🟢 Running' if rednote_monitor_task.is_running() else '🔴 Stopped'}",
         "",
         f"• Market hours (8:00-20:00): {'✅ Active' if is_market_hours() else '❌ Inactive'}",
         f"• ETF monitor (16:00-21:00): {'✅ Active' if is_etf_monitor_window() else '❌ Inactive'}",

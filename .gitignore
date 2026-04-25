@@ -113,3 +113,5 @@ cache/
 *.png
 *.csv
 __pycache__
+reference/*
+verification/*
