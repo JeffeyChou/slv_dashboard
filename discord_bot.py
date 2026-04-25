@@ -139,6 +139,37 @@ def is_etf_monitor_window():
     return is_weekday() and 16 <= now_est.hour < 21
 
 
+def is_rednote_monitor_window():
+    """Check if current time is within Rednote monitor window (Mon-Fri 8:30 AM - 5:00 PM EST)"""
+    now_est = datetime.now(EST)
+    if now_est.weekday() >= 5:
+        return False
+    if now_est.hour < 8 or (now_est.hour == 8 and now_est.minute < 30):
+        return False
+    if now_est.hour >= 17:
+        return False
+    return True
+
+
+# Rednote monitor scheduling state
+_next_rednote_scan = None
+_REDNOTE_MEAN_INTERVAL_MIN = 30
+_REDNOTE_STDDEV_MIN = 5
+_REDNOTE_MIN_INTERVAL_MIN = 15
+_REDNOTE_MAX_INTERVAL_MIN = 50
+
+
+def _compute_next_rednote_scan():
+    """Compute next scan time using normal distribution jitter."""
+    from datetime import timedelta
+    import random as _rng
+    interval = max(
+        _REDNOTE_MIN_INTERVAL_MIN,
+        min(_REDNOTE_MAX_INTERVAL_MIN, _rng.gauss(_REDNOTE_MEAN_INTERVAL_MIN, _REDNOTE_STDDEV_MIN))
+    )
+    return datetime.now(EST) + timedelta(minutes=interval)
+
+
 def check_etf_changes():
     """
     Check if ETF holdings have changed compared to database.
@@ -153,26 +184,45 @@ def check_etf_changes():
     return slv_updated, gld_updated, slv_data, gld_data
 
 
-@tasks.loop(minutes=15)
+@tasks.loop(minutes=1)
 async def rednote_monitor_task():
     """
     Monitor Rednote accounts for new posts.
-    Runs every 15 minutes.
+    Ticks every 1 minute, but only scans when the next scheduled time arrives.
+    Active window: Mon-Fri 8:30 AM - 5:00 PM EST.
+    Interval: ~30 min average with normal distribution jitter.
     """
+    global _next_rednote_scan
+
+    if not is_rednote_monitor_window():
+        return
+
+    now = datetime.now(EST)
+
+    # Initialize on first tick within window
+    if _next_rednote_scan is None:
+        _next_rednote_scan = now
+
+    if now < _next_rednote_scan:
+        return
+
+    # Schedule next scan before running (prevents hammering on failure)
+    _next_rednote_scan = _compute_next_rednote_scan()
+    logger.info(f"Next Rednote scan scheduled at {_next_rednote_scan.strftime('%H:%M:%S')} EST")
+
     cookie = os.getenv("REDNOTE_COOKIE")
     user_ids_raw = os.getenv("REDNOTE_MONITOR_ID_LISTS", "")
     webhook_url = os.getenv("DISCORD_WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK_URLS", "").split(",")[0]
-    
+
     if not cookie or not user_ids_raw:
         logger.warning("Rednote monitor skipped: REDNOTE_COOKIE or REDNOTE_MONITOR_ID_LISTS not set.")
         return
 
-    logger.info("🏮 Running scheduled Rednote scan...")
+    logger.info("Running scheduled Rednote scan...")
     try:
         user_ids = [uid.strip() for uid in user_ids_raw.split(",") if uid.strip()]
         monitor = RednoteMonitor(cookie, user_ids, webhook_url)
-        
-        # Run in executor because it's synchronous HTTP scraping
+
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(executor, monitor.scan_all)
     except Exception as e:
@@ -481,7 +531,7 @@ async def on_ready():
     logger.info("  • Daily Market Update: Mon-Fri 17:00 (5 PM)")
     logger.info("  • ETF Monitor: Mon-Fri 16:00-21:00 (Every 5 mins)")
     logger.info("  • Daily Report (Data+Chart): Mon-Fri 20:30 (8:30 PM)")
-    logger.info("  • Rednote Monitor: Every 15 mins")
+    logger.info("  • Rednote Monitor: Mon-Fri 8:30-17:00 EST (~30 min intervals)")
     logger.info("=" * 50)
     try:
         synced = await bot.tree.sync()

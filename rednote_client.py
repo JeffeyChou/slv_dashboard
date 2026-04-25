@@ -2,9 +2,40 @@ import requests
 import re
 import json
 import logging
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_timestamp(value) -> Optional[str]:
+    """Convert XHS timestamp (epoch seconds or ms) to ISO 8601 string."""
+    if not value or not isinstance(value, (int, float)):
+        return None
+    # XHS uses epoch seconds for older posts, epoch ms for newer
+    ms = value if value > 10_000_000_000 else value * 1000
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+    except (OSError, ValueError):
+        return None
+
+
+def _note_id_to_timestamp(note_id: str) -> Optional[str]:
+    """
+    Extract publish timestamp from XHS note ID.
+    XHS note IDs encode Unix epoch seconds in the first 8 hex characters.
+    e.g. '69ece93a000000003502ffc2' -> 0x69ece93a = 1777122618 -> 2026-04-23T...
+    """
+    if not note_id or len(note_id) < 8:
+        return None
+    try:
+        epoch_sec = int(note_id[:8], 16)
+        # Sanity check: must be after 2020-01-01 and before 2040-01-01
+        if not (1577836800 < epoch_sec < 2208988800):
+            return None
+        return datetime.fromtimestamp(epoch_sec, tz=timezone.utc).isoformat()
+    except (ValueError, OSError):
+        return None
 
 class RednoteClient:
     """
@@ -81,36 +112,39 @@ class RednoteClient:
         logger.error(f"Failed to fetch notes for user {user_id}. Errors: {errors}")
         return []
 
-    def fetch_note_content(self, note_id: str, xsec_token: str) -> str:
+    def fetch_note_content(self, note_id: str, xsec_token: str) -> Dict:
         """
-        Fetch the full text content of a specific note.
+        Fetch the full text content and timestamp of a specific note.
+        Returns dict with 'content' (str) and 'published_at' (ISO str or None).
         """
         url = f"https://www.rednote.com/explore/{note_id}?xsec_token={xsec_token}&xsec_source=pc_user"
+        empty = {"content": "", "published_at": None}
         try:
             html = self._get_url(url)
             if not html:
-                return ""
-            
-            # Extract INITIAL_STATE
+                return empty
+
             match = re.search(r'<script>window\.__INITIAL_STATE__=(.*?)</script>', html, re.S)
             if not match:
-                return ""
-            
+                return empty
+
             state_str = match.group(1).strip()
             if state_str.endswith(';'):
                 state_str = state_str[:-1]
             state_str = state_str.replace('undefined', 'null')
             state = json.loads(state_str)
-            
-            # Navigate to note['noteDetailMap'][note_id]['note']['desc']
+
             note_detail_map = state.get('note', {}).get('noteDetailMap', {})
             note_data = note_detail_map.get(note_id, {}).get('note', {})
+
             desc = note_data.get('desc', '')
-            
-            return desc
+            raw_time = note_data.get('time') or note_data.get('lastUpdateTime')
+            published_at = _normalize_timestamp(raw_time)
+
+            return {"content": desc, "published_at": published_at}
         except Exception as e:
             logger.error(f"Error fetching note content: {e}")
-            return ""
+            return empty
 
     def _extract_notes_from_html(self, html: str, user_id: str) -> List[Dict]:
         """
@@ -214,13 +248,22 @@ class RednoteClient:
 
         # User nickname
         author_name = nickname or user.get('nickname') or user.get('nickName') or fallback_user_id
-        
+
+        # Timestamp extraction: noteCard fields first, fall back to note ID decoding
+        post_time = (
+            note_card.get('time') or
+            note.get('time') or
+            note_card.get('lastUpdateTime') or
+            note.get('lastUpdateTime')
+        )
+        published_at = _normalize_timestamp(post_time) or _note_id_to_timestamp(note_id)
+
         # URL construction
-        base_url = "https://www.xiaohongshu.com/explore"
+        base_url = "https://www.rednote.com/explore"
         url = f"{base_url}/{note_id}"
         if xsec_token:
             url += f"?xsec_token={xsec_token}&xsec_source=pc_user"
-            
+
         return {
             "id": note_id,
             "user_id": user.get('userId') or user.get('user_id') or fallback_user_id,
@@ -229,7 +272,8 @@ class RednoteClient:
             "url": url,
             "image_url": image_url,
             "type": note_card.get('type') or note.get('type', 'normal'),
-            "xsec_token": xsec_token
+            "xsec_token": xsec_token,
+            "published_at": published_at
         }
 
 if __name__ == "__main__":

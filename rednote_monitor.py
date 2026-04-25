@@ -4,77 +4,159 @@ import time
 import random
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from rednote_client import RednoteClient
 
 logger = logging.getLogger(__name__)
 
-class RednoteSeenStore:
+
+class RednotePostIndex:
     """
-    Store for keeping track of already seen note IDs to avoid duplicate notifications.
+    Rich post index that tracks metadata (timestamps, position, title) for each note.
+    Replaces the simpler RednoteSeenStore with auto-migration from the old format.
     """
     def __init__(self, path: str):
         self.path = path
-        self.seen_data = self._load()
+        self.data = self._load()
 
     def _load(self) -> dict:
+        # Try new format first
         if os.path.exists(self.path):
             try:
                 with open(self.path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                if data.get("version") == 2:
+                    return data
             except Exception as e:
-                logger.error(f"Failed to load seen state from {self.path}: {e}")
-        return {"users": {}}
+                logger.error(f"Failed to load post index from {self.path}: {e}")
+
+        # Fall back to old rednote_seen.json format and migrate
+        old_path = os.path.join(os.path.dirname(self.path), "rednote_seen.json")
+        if os.path.exists(old_path):
+            try:
+                with open(old_path, 'r', encoding='utf-8') as f:
+                    old_data = json.load(f)
+                logger.info(f"Migrating from {old_path} to {self.path}")
+                return self._migrate_v1(old_data)
+            except Exception as e:
+                logger.error(f"Failed to migrate from {old_path}: {e}")
+
+        return {"version": 2, "users": {}}
+
+    def _migrate_v1(self, old_data: dict) -> dict:
+        """Migrate v1 (rednote_seen.json) format to v2 (rednote_posts.json)."""
+        new_data = {"version": 2, "users": {}}
+        for user_id, user_info in old_data.get("users", {}).items():
+            new_notes = {}
+            for note_id, note_info in user_info.get("notes", {}).items():
+                seen_at = note_info.get("seen_at")
+                new_notes[note_id] = {
+                    "first_seen_at": seen_at,
+                    "last_seen_at": seen_at,
+                    "published_at": None,
+                    "title": None,
+                    "position": None
+                }
+            new_data["users"][user_id] = {
+                "baseline_at": user_info.get("baseline_at"),
+                "notes": new_notes
+            }
+        return new_data
 
     def _save(self):
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, 'w', encoding='utf-8') as f:
-                json.dump(self.seen_data, f, indent=2, ensure_ascii=False)
+                json.dump(self.data, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"Failed to save seen state to {self.path}: {e}")
+            logger.error(f"Failed to save post index to {self.path}: {e}")
 
     def is_seen(self, user_id: str, note_id: str) -> bool:
-        user_notes = self.seen_data.get("users", {}).get(user_id, {}).get("notes", {})
-        return note_id in user_notes
+        return note_id in self.data.get("users", {}).get(user_id, {}).get("notes", {})
 
-    def mark_seen(self, user_id: str, note_id: str):
-        if "users" not in self.seen_data:
-            self.seen_data["users"] = {}
-        if user_id not in self.seen_data["users"]:
-            self.seen_data["users"][user_id] = {"notes": {}, "baseline_at": None}
-        
-        self.seen_data["users"][user_id]["notes"][note_id] = {
-            "seen_at": datetime.now().isoformat()
+    def mark_seen(self, user_id: str, note: dict):
+        """Mark a note as seen, storing its metadata."""
+        if "users" not in self.data:
+            self.data["users"] = {}
+        if user_id not in self.data["users"]:
+            self.data["users"][user_id] = {"notes": {}, "baseline_at": None}
+
+        now = datetime.now().isoformat()
+        note_id = note["id"]
+        existing = self.data["users"][user_id]["notes"].get(note_id)
+
+        self.data["users"][user_id]["notes"][note_id] = {
+            "first_seen_at": existing["first_seen_at"] if existing else now,
+            "last_seen_at": now,
+            "published_at": note.get("published_at"),
+            "title": note.get("title"),
+            "position": note.get("position")
         }
         self._save()
 
     def has_baseline(self, user_id: str) -> bool:
-        return self.seen_data.get("users", {}).get(user_id, {}).get("baseline_at") is not None
+        return self.data.get("users", {}).get(user_id, {}).get("baseline_at") is not None
 
-    def set_baseline(self, user_id: str, note_ids: list):
-        if "users" not in self.seen_data:
-            self.seen_data["users"] = {}
-        if user_id not in self.seen_data["users"]:
-            self.seen_data["users"][user_id] = {"notes": {}, "baseline_at": None}
-        
+    def set_baseline(self, user_id: str, notes: list):
+        """Set baseline with full note metadata."""
+        if "users" not in self.data:
+            self.data["users"] = {}
+        if user_id not in self.data["users"]:
+            self.data["users"][user_id] = {"notes": {}, "baseline_at": None}
+
         now = datetime.now().isoformat()
-        self.seen_data["users"][user_id]["baseline_at"] = now
-        for nid in note_ids:
-            if nid not in self.seen_data["users"][user_id]["notes"]:
-                self.seen_data["users"][user_id]["notes"][nid] = {"seen_at": now}
+        self.data["users"][user_id]["baseline_at"] = now
+        for note in notes:
+            nid = note["id"]
+            if nid not in self.data["users"][user_id]["notes"]:
+                self.data["users"][user_id]["notes"][nid] = {
+                    "first_seen_at": now,
+                    "last_seen_at": now,
+                    "published_at": note.get("published_at"),
+                    "title": note.get("title"),
+                    "position": note.get("position")
+                }
         self._save()
+
+    def is_likely_sticky(self, note: dict, all_notes: list, threshold_days: int = 7) -> bool:
+        """
+        Detect if a note is likely sticky/pinned.
+        A post is sticky if its published_at is significantly older than the newest post.
+        """
+        note_time = note.get("published_at")
+        if not note_time:
+            return False
+
+        try:
+            note_dt = datetime.fromisoformat(note_time)
+        except ValueError:
+            return False
+
+        other_times = []
+        for n in all_notes:
+            t = n.get("published_at")
+            if t and n["id"] != note["id"]:
+                try:
+                    other_times.append(datetime.fromisoformat(t))
+                except ValueError:
+                    continue
+
+        if not other_times:
+            return False
+
+        newest = max(other_times)
+        return (newest - note_dt) > timedelta(days=threshold_days)
 
 class RednoteMonitor:
     """
     Monitor that polls multiple users and sends notifications for new notes.
     """
-    def __init__(self, cookie: str, user_ids: list, webhook_url: str, state_path: str = "cache/rednote_seen.json"):
+    def __init__(self, cookie: str, user_ids: list, webhook_url: str, state_path: str = "cache/rednote_posts.json"):
         self.client = RednoteClient(cookie)
         self.user_ids = [uid.strip() for uid in user_ids if uid.strip()]
         self.webhook_url = webhook_url
-        self.store = RednoteSeenStore(state_path)
+        self.store = RednotePostIndex(state_path)
 
     def scan_all(self):
         """
@@ -101,30 +183,46 @@ class RednoteMonitor:
         if not notes:
             return
 
+        # Annotate position in the fetched list
+        for idx, note in enumerate(notes):
+            note['position'] = idx
+
         # Handle baseline (first run)
         if not self.store.has_baseline(user_id):
             logger.info(f"Seeding baseline for user {user_id} with {len(notes)} notes.")
-            self.store.set_baseline(user_id, [n['id'] for n in notes])
+            self.store.set_baseline(user_id, notes)
             return
 
         # Find unseen notes
         new_notes = [n for n in notes if not self.store.is_seen(user_id, n['id'])]
-        
+
         if not new_notes:
             return
 
-        logger.info(f"Found {len(new_notes)} new notes for user {user_id}!")
-        
-        # Sort oldest to newest if possible (though we don't have accurate timestamps in simple list, 
-        # usually they are sorted newest first in the API response)
-        # We process them in reverse to send oldest first to Discord
-        for note in reversed(new_notes):
-            # Fetch full content for new note
-            full_content = self.client.fetch_note_content(note['id'], note.get('xsec_token', ''))
-            note['content'] = full_content
-            
+        # Filter out sticky/pinned posts
+        genuinely_new = []
+        for note in new_notes:
+            if self.store.is_likely_sticky(note, notes):
+                logger.info(f"Skipping likely sticky post {note['id']} (old timestamp at top of feed)")
+                self.store.mark_seen(user_id, note)
+            else:
+                genuinely_new.append(note)
+
+        if not genuinely_new:
+            return
+
+        logger.info(f"Found {len(genuinely_new)} new notes for user {user_id}!")
+
+        # Process oldest first (notes are typically newest-first from API)
+        for note in reversed(genuinely_new):
+            detail = self.client.fetch_note_content(note['id'], note.get('xsec_token', ''))
+            note['content'] = detail['content']
+            # Prefer authoritative timestamp from detail page over note-ID-derived one
+            if detail['published_at']:
+                note['published_at'] = detail['published_at']
+
             self.notify(note)
-            self.store.mark_seen(user_id, note['id'])
+            self.store.mark_seen(user_id, note)
 
     def notify(self, note: Dict):
         """
